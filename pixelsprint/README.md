@@ -75,7 +75,7 @@ fails rather than silently substituting a different algorithm.
 pixelsprint/
 ├── Makefile
 ├── README.md
-├── TESTING.md              # audit test log
+├── TESTING.md              # audit and submission test log
 ├── pixelsprint             # built by make; tracked convenience copy
 ├── src/
 │   └── pixelsprint.c
@@ -333,7 +333,9 @@ The separate LUT-application measurement for the same run was:
 The two-thread LUT efficiency above 1.0 is measurement noise; it is not a claim of
 superlinear scaling. V4 and V5 were the fastest parallel histogram variants in this run,
 but their ranking and speedups varied in repeated runs. The full-precision values are in
-`output/results.csv`; `TESTING.md` records the commands and the broader audit evidence.
+`output/results.csv`; `TESTING.md` records the commands, the broader audit evidence, and a
+separate 256 x 256 submission-verification run. That smaller run was used only for final
+acceptance checking and does not replace this 2048 x 2048 dataset.
 
 ## 16. CDF, lookup table, and equalization
 
@@ -390,6 +392,8 @@ and BGR byte order. Both grayscale values are copied into all three color channe
 - The CDF is sequential. Only 256 bins are processed, so parallelizing it would add more
   overhead than useful work in this project.
 - V1 demonstrates a race; its result is timing-dependent and is not a correctness test.
+- The maximum generated size (8192 x 8192) was not exercised end-to-end in the final
+  audit or submission-verification run; it remains untested.
 - Array-section reduction support is a compiler feature. If the compiler cannot build
   V5, the build fails rather than silently substituting another algorithm.
 

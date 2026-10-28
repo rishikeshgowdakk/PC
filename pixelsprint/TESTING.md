@@ -1,7 +1,50 @@
 # PixelSprint test log
 
-This file records commands and results from the final audit of the committed source. It is
-a test log, not a separate VTU project report. Run the commands from `pixelsprint/`.
+This file records commands and results from the final audit of the committed source and a
+separate final submission-verification run. It is a test log, not a separate VTU project
+report. Run the commands from `pixelsprint/`.
+
+## Final submission verification (new run)
+
+Date: 28 October 2026. This run was performed separately from the original final audit
+recorded below. It used the same committed source and did not change the source code.
+
+| Check | Command / method | Result |
+|---|---|---|
+| Clean build | `make clean` | PASS; removed the executable and generated output files |
+| Build | `make` | PASS; exit 0; GCC emitted no warnings for `-O2 -Wall -Wextra -fopenmp` |
+| Help | `./pixelsprint --help` | PASS; exit 0 |
+| Demo | `./pixelsprint --demo` | PASS; exit 0; V0 total 4,194,304; V2-V5 `differing_bins=0`; V1 raced in all three attempts |
+| Benchmark | `./pixelsprint --benchmark --size 256` | PASS; exit 0; 21 data rows and 10 columns; V2-V5 `PASS`; V1 `RACE` at 2, 4, and 12 threads |
+| Demo thread variants | `--demo --size 256 --threads 1`, then `2`, then `4` | PASS; all runs exit 0; V2-V5 `differing_bins=0`; V1 no race at 1 thread and races at 2 and 4 threads |
+| Valid/malformed PPM | Temporary P6/P5 fixtures and a truncated P6 | PASS; valid and commented P6 accepted; P5, truncated, and trailing-byte PPM rejected with exit 1 |
+| Uniform image | 16 x 16 P6, all RGB values 128 | PASS; `before.bmp` and `after.bmp` were byte-identical |
+| Unsafe selection | `--demo --size 16 --threads 2 --variant unsafe` | PASS; warned that V1 is unsafe and equalized with the V0 fallback |
+| Input overwrite protection | PPM named `before.bmp` in the output directory | PASS; exit 1; input checksum unchanged |
+| BMP layout | Known 3 x 2 PPM processed to BMP | PASS; `BM` signature, 54-byte offset, 24 bpp, image size 24, bottom-up rows, grayscale BGR triples, and row padding verified |
+| Invalid CLI | 20 cases covering missing/duplicate/unknown options, invalid sizes/threads, incompatible modes, and a nonexistent input | PASS; every case exited 1 |
+| Output/error paths | Missing parent, output path that is a file, and read-only output directory | PASS; each exited 1; no output files were written in the read-only case |
+| Allocation failure | `ulimit -v 32768` with `--demo --size 4096` | PASS; exit 1 with a clear allocation error |
+| Actual thread count | `OMP_THREAD_LIMIT=8 ... --benchmark --size 256 --threads 32` | PASS; requested 12 and 32 both reported actual 8, and efficiency used 8 |
+| ASan/UBSan | Demo 256 at 4 threads, valid PPM, truncated PPM | PASS; no AddressSanitizer, UBSan, or leak diagnostics; the truncated PPM exited 1 as intended |
+
+Demo 2048 V1 observed losses were 1,586,796, 1,635,427, and 1,526,220 pixels in the
+three attempts. A missing race in a later run would not make V1 safe.
+
+The requested 256 x 256 benchmark wrote a fresh `output/results.csv` for validation. The
+tracked `output/results.csv` was then restored byte-for-byte to the committed 2048 x 2048
+final-audit run (SHA-256
+`a99a19784b80df980d7f2d288ccf881768d45878a6cc3bbd998f9ca13ccabfd3`) so the README's
+2048 x 2048 table and the committed CSV remain consistent. The 256 run is not substituted
+into that table, and no benchmark values were edited. Its highlights were V0
+`0.054889 ms`; V4 at 12 threads `0.040555 ms`, speedup `1.353446`, efficiency `0.112787`;
+V5 at 12 threads `0.032676 ms`, speedup `1.679795`, efficiency `0.139983`; LUT at 12
+threads `0.029450 ms`, speedup `0.917386`, efficiency `0.076449`. These small-image timings
+are overhead-dominated and are not directly comparable with the 2048 x 2048 results.
+
+The sections below are the original final-audit record. This submission-verification pass
+did not rerun ThreadSanitizer; the prior limitation remains: a reliable clean TSan pass was
+not obtained. The full 8192 x 8192 case remains **NOT RUN**.
 
 ## Environment
 
