@@ -59,7 +59,7 @@ intrinsics, OpenCV, or any external C library.
 
 ## 6. Requirements and dependencies
 
-- Ubuntu or another Linux environment with a C compiler (GCC recommended)
+- Ubuntu Linux (the tested environment) with a C compiler; GCC is recommended
 - GCC with OpenMP 4.5 or newer **and array-section reduction support**
 - GNU Make
 - No Python, OpenCV, GPU, MPI, or internet connection is required
@@ -90,6 +90,12 @@ by `--output`, when it needs to write results. The repository includes a sample
 `output/` directory and a convenience executable for demonstration; `make` rebuilds the
 executable from `src/pixelsprint.c`, and the sample outputs can be regenerated as shown
 below.
+
+The end-to-end program flow is: parse and validate the command line; generate or load the
+image; convert RGB to grayscale; build the V0 reference and the selected/validated
+histogram; compute the CDF/LUT; apply the LUT in parallel; and write the BMP or benchmark
+output. `--demo` additionally runs V1 three times and validates V2-V5. `--benchmark`
+measures each variant/thread case with one warm-up and seven timed repetitions.
 
 ## 8. Build instructions
 
