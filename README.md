@@ -1,427 +1,198 @@
-# PixelSprint: Race-Free Parallel Histogram Equalization with OpenMP
+# CrowdSim — Sequential and OpenMP-Based Parallel Particle Movement Simulator
 
-## 1. Project title
+## Abstract
 
-**PixelSprint: Race-Free Parallel Histogram Equalization with OpenMP**
+CrowdSim simulates the movement of many independent particles inside a bounded
+two-dimensional environment.  Each particle has a position and velocity; at
+every time step its position is updated and reflected off the walls.
 
-## 2. Abstract
+The simulation is implemented twice — once sequentially and once using OpenMP
+shared-memory parallelism — and both runs are timed, compared, and validated.
+This demonstrates loop-level parallelism, thread-safe computation, and
+performance measurement on a straightforward computational workload.
 
-Histogram equalization is a classical grayscale image-enhancement technique. Its first
-step, building a 256-bin histogram, is a reduction over the image pixels. A careless
-OpenMP implementation updates one shared histogram from several threads and therefore
-contains a data race. PixelSprint demonstrates that unsafe version, then implements and
-validates four correct OpenMP strategies: `critical`, `atomic`, per-thread private
-histograms, and an OpenMP array-section reduction. The program measures histogram and
-lookup-table (LUT) application times, reports speedup and parallel efficiency, and writes
-before/after 24-bit BMP images plus a CSV file containing measurements from the current
-run.
+> **Note:** CrowdSim is an educational particle simulator.  It does not model
+> real human crowd behaviour, collision, pathfinding, or physics.
 
-## 3. Problem statement
+---
 
-For every pixel, the program calculates
+## Problem Statement
 
-```c
-gray = (299 * R + 587 * G + 114 * B) / 1000;
-```
+Updating the positions of *N* particles over *S* time steps requires *N × S*
+independent calculations.  When *N* is large, this workload becomes
+significant.  Because each particle's update depends only on its own state, the
+inner loop is *embarrassingly parallel* and maps naturally onto OpenMP threads.
 
-and increments `histogram[gray]`. Incrementing a counter is a read-modify-write
-operation. If two threads execute it on the same bin without synchronization, one update
-can overwrite the other and the final histogram can be smaller than the number of pixels.
-Histogram equalization then produces a wrong LUT and wrong output image. The project
-compares synchronization strategies for correctness and performance on a CPU.
+---
 
-## 4. Research question
+## Objectives
 
-**How do different OpenMP histogram synchronization strategies affect correctness,
-execution time, speedup, and parallel efficiency on a CPU?**
+| # | Objective |
+|---|-----------|
+| 1 | Simulate particle movement with wall reflection in a bounded 2-D area. |
+| 2 | Implement a sequential (single-threaded) reference version. |
+| 3 | Implement a parallel version using OpenMP `parallel for`. |
+| 4 | Measure runtime, speedup, and parallel efficiency. |
+| 5 | Validate that both implementations produce identical results. |
 
-## 5. Syllabus mapping (BCS702 Parallel Computing)
+---
 
-### Module 4 — OpenMP
+## Syllabus Mapping (VTU Parallel Computing)
 
-- Parallel loops using `parallel for`
-- Shared and private variables
-- Race conditions and thread safety
-- `critical` and `atomic`
-- `reduction`
-- `schedule(static)`
+### Module 1 — Introduction to Parallel Programming
+- Shared-memory programming model.
+- Coordinating threads that share an address space.
+- Parallel hardware concepts (multi-core CPUs).
 
 ### Module 2 — Performance
+- Measuring execution time of sequential and parallel programs.
+- Speedup and efficiency for MIMD systems.
+- Scalability considerations (overhead vs. workload size).
 
-- Execution-time measurement with `omp_get_wtime()`
-- Sequential versus parallel execution
-- Speedup
-- Parallel efficiency
-- Effects of thread count and synchronization overhead
+### Module 4 — Shared-Memory Programming with OpenMP
+- `#pragma omp parallel for` directive.
+- Static loop scheduling (`schedule(static)`).
+- Variable scoping — each particle element is accessed by exactly one thread.
+- Thread safety — no shared mutable state between loop iterations.
 
-This project uses only C and OpenMP. It does **not** implement MPI, CUDA, SIMD
-intrinsics, OpenCV, or any external C library.
+> This project does **not** implement MPI, CUDA, or distributed-memory
+> parallelism.
 
-## 6. Requirements and dependencies
+---
 
-- Ubuntu Linux (the tested environment) with a C compiler; GCC is recommended
-- GCC with OpenMP 4.5 or newer **and array-section reduction support**
-- GNU Make
-- No Python, OpenCV, GPU, MPI, or internet connection is required
+## Algorithm
 
-The default command was built and tested with GCC 15.2.0, which reports OpenMP 4.5.
-The source contains a compile-time check for `_OPENMP >= 201511`. Actual array-section
-reduction support is a compiler feature: if the compiler does not implement it, the build
-fails rather than silently substituting a different algorithm.
+### Sequential
 
-## 7. Directory structure
-
-```text
-pixelsprint/
-├── Makefile
-├── README.md
-├── TESTING.md              # audit and submission test log
-├── pixelsprint             # built by make; tracked convenience copy
-├── src/
-│   └── pixelsprint.c
-└── output/                 # sample outputs; regenerated by the program
-    ├── before.bmp          # generated by demo/normal mode
-    ├── after.bmp           # generated by demo/normal mode
-    └── results.csv         # generated by benchmark mode
+```
+for each time step s = 1 … S:
+    for each particle i = 1 … N:
+        p[i].x += p[i].vx
+        p[i].y += p[i].vy
+        reflect p[i] off walls
 ```
 
-`output/` is not needed to compile. The program creates it, or another directory named
-by `--output`, when it needs to write results. The repository includes a sample
-`output/` directory and a convenience executable for demonstration; `make` rebuilds the
-executable from `src/pixelsprint.c`, and the sample outputs can be regenerated as shown
-below.
+### Parallel (OpenMP)
 
-The end-to-end program flow is: parse and validate the command line; generate or load the
-image; convert RGB to grayscale; build the V0 reference and the selected/validated
-histogram; compute the CDF/LUT; apply the LUT in parallel; and write the BMP or benchmark
-output. `--demo` additionally runs V1 three times and validates V2-V5. `--benchmark`
-measures each variant/thread case with one warm-up and seven timed repetitions.
+```
+for each time step s = 1 … S:
+    #pragma omp parallel for schedule(static)
+    for each particle i = 1 … N:
+        p[i].x += p[i].vx
+        p[i].y += p[i].vy
+        reflect p[i] off walls
+```
 
-## 8. Build instructions
+The outer loop remains serial because step *s+1* depends on the positions
+computed during step *s*.  The inner loop is parallel because particles are
+independent.
+
+---
+
+## Requirements
+
+- **GCC** with OpenMP support (`-fopenmp`).
+- Standard C library and math library (`-lm`).
+- A POSIX-like environment (Linux, macOS, WSL).
+
+No external libraries, frameworks, or runtimes are required.
+
+---
+
+## Build and Run
 
 ```bash
-cd pixelsprint
+# Compile
 make
-```
 
-The Makefile uses exactly:
+# Run with defaults (50 000 particles, 500 steps, 4 threads)
+./crowd_sim
 
-```bash
-gcc -O2 -Wall -Wextra -fopenmp src/pixelsprint.c -o pixelsprint
-```
+# Custom parameters
+./crowd_sim --particles 100000 --steps 500 --threads 4
 
-To remove the executable and project-generated/sample files:
+# Show usage
+./crowd_sim --help
 
-```bash
+# Run automated tests
+make test
+
+# Remove compiled binary
 make clean
 ```
 
-`make clean` does not remove source code, the Makefile, or the documentation. It removes
-the executable, `output/before.bmp`, `output/after.bmp`, and `output/results.csv`.
-Recreate the images with `make run` and the benchmark CSV with `make benchmark`.
+---
 
-## 9. Demo commands
+## Command-Line Options
 
-```bash
-make run
-# equivalent to:
-./pixelsprint --demo
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--particles N` | Number of particles | 50 000 |
+| `--steps N` | Number of simulation time steps | 500 |
+| `--threads N` | Number of OpenMP threads | 4 |
+| `--help` | Print usage information and exit | — |
+
+All numeric arguments must be positive integers.  Invalid values are rejected
+with an error message.
+
+---
+
+## Performance Formulas
+
+### Speedup
+
+```
+Speedup = T_sequential / T_parallel
 ```
 
-Smaller/faster demonstration:
+### Parallel Efficiency
 
-```bash
-./pixelsprint --demo --size 256 --threads 4
+```
+Efficiency = Speedup / Number_of_threads × 100%
 ```
 
-The demo:
+---
 
-- builds the sequential reference histogram (V0);
-- runs the unsafe histogram three times and reports the real outcome;
-- validates `critical`, `atomic`, `private`, and `reduction` against V0;
-- exits non-zero if a protected variant fails;
-- equalizes with a correct histogram and writes `output/before.bmp` and
-  `output/after.bmp`;
-- prints 32-bucket ASCII histograms before and after equalization.
+## Practical Relevance
 
-## 10. Benchmark commands
+Updating many independent objects at each time step is a common pattern in:
 
-```bash
-make benchmark
-# equivalent to:
-./pixelsprint --benchmark --size 2048
+- Particle simulations (molecular dynamics, fluid particles).
+- Game-engine entity updates.
+- Agent-based modelling.
+- Monte Carlo methods.
+
+CrowdSim demonstrates the simplest form of this pattern — an embarrassingly
+parallel loop — and shows how to apply OpenMP with minimal effort.
+
+---
+
+## Limitations
+
+- **Hardware-dependent results.**  Speedup depends on the number of physical
+  cores, CPU frequency, memory bandwidth, cache effects, and system load.
+- **Small workloads may be slower in parallel** because of thread-creation and
+  synchronisation overhead.
+- **No collision detection.**  Particles pass through each other.
+- **No real crowd dynamics.**  The simulation is a pedagogical tool, not a
+  crowd-prediction system.
+- **Single measurement.**  For statistically robust benchmarks, multiple runs
+  and warm-up iterations would be needed.
+
+---
+
+## Repository Structure
+
+```
+CrowdSim/
+├── crowd_sim.c      # Complete C source code
+├── Makefile          # Build, run, test, clean targets
+├── README.md         # This file
+└── .gitignore        # Ignore compiled artefacts
 ```
 
-The benchmark writes `output/results.csv`. Every reported value comes from the current
-run; no sample timing values are built into the program.
+---
 
-Benchmark details:
+## License
 
-- test thread counts: `1`, `2`, `4`, and `omp_get_max_threads()`, with duplicates removed;
-- if `--threads T` is also supplied, the standard set is still used and `T` is added when
-  it is distinct; the program prints a note explaining this;
-- every histogram case performs one warm-up and seven measured repetitions;
-- the median of the seven repetitions is reported;
-- the histogram is zeroed outside the timer before every repetition;
-- private-histogram workspace allocation and zeroing are outside the histogram timer;
-  V4's final merge is included in its timed histogram operation, just as V5's reduction
-  combine step is part of its timed operation;
-- image generation, allocation, comparison, printing, and I/O are outside timers;
-- LUT application is measured separately with its own warm-up and seven repetitions;
-- V1 is marked as unsafe/race-affected and is never presented as a valid speedup;
-- a protected variant that fails validation is marked `FAIL`; its speedup and efficiency
-  are `N/A`, and the process exits non-zero.
-
-## 11. Command-line option reference
-
-```text
-./pixelsprint [options]
-
---help                  Show usage and exit successfully.
---demo                  Run correctness demonstration; create BMP images.
---benchmark             Benchmark all variants; write results.csv.
---size N                Generated square image size, 16..8192. Default: 2048.
---threads T             Requested OpenMP threads, 1..256. Default: runtime maximum.
---variant NAME          sequential|unsafe|critical|atomic|private|reduction.
-                        Default for normal processing/demo equalization: reduction.
---input FILE.ppm        Read a regular, seekable binary PPM P6 image (maximum value 255).
---output DIR            Output directory. Default: output/; its parent must exist.
-```
-
-Option interaction rules:
-
-- No mode option means normal single-image processing.
-- `--demo` and `--benchmark` are mutually exclusive.
-- `--size` and `--input` are mutually exclusive; a PPM supplies its own dimensions.
-- `--variant` cannot be combined with `--benchmark`, because every variant is tested.
-- Duplicate options and unknown options are rejected with a non-zero exit status.
-- `--output` creates the final directory if needed; its parent directory must already
-  exist.
-- The program refuses to overwrite the input: if a planned output file (`before.bmp`,
-  `after.bmp`, or `results.csv`) resolves to the same file as `--input`, it exits with an
-  error before writing.
-- `--threads` is a request. The program prints the actual thread count reported by the
-  OpenMP runtime. If fewer threads are supplied, the actual number is used in efficiency.
-- In demo mode, `--variant` selects the safe histogram used for equalization. All
-  protected variants are still validated. Choosing `unsafe` prints a warning and falls
-  back to V0 for equalization; the unsafe histogram is never used to create the output
-  image.
-- In normal mode, the selected safe variant is checked against V0 before equalization.
-
-Errors are written to standard error and return a non-zero exit status.
-
-## 12. Histogram variants
-
-| Variant | Implementation | Safety | Main trade-off |
-|---|---|---|---|
-| V0 sequential | One normal C loop over all pixels | Race-free reference | No parallel speedup; baseline |
-| V1 unsafe | `histogram[gray[i]]++` in a shared OpenMP loop | **Intentionally racy** | Fast-looking but can lose counts; never used for output |
-| V2 critical | Every increment inside `#pragma omp critical` | Correct | Serializes all histogram updates; high contention |
-| V3 atomic | Every increment inside `#pragma omp atomic` | Correct | Protects one update, but same-bin contention remains |
-| V4 private | One 256-bin histogram per actual thread, then merge | Correct | Extra memory and a final merge; little per-pixel contention |
-| V5 reduction | `reduction(+:hist[:256])` array-section reduction | Correct | Requires OpenMP 4.5 support; runtime handles private copies and merge |
-
-All parallel histogram loops use `schedule(static)`.
-
-V4 sizes its workspace for the requested team (an upper bound). It records the actual
-team size before indexing the workspace, merges only that many private histograms, and
-fails safely instead of writing out of bounds if a runtime ever supplies more threads
-than the workspace can hold.
-
-## 13. Correctness and race detection
-
-For every variant the program prints the pixel count, the histogram total, the number of
-bins that differ from V0, and a status.
-
-- V0 is the reference. Its total must equal `width * height`.
-- V2, V3, V4, and V5 must match all 256 bins exactly. Any mismatch is `FAIL`, and demo or
-  normal processing exits non-zero without using that histogram.
-- V1 is run three times in `--demo`. Each attempt reports its actual total, differing-bin
-  count, and lost count when the total is below the pixel count. If the total is unchanged
-  but bins differ, the program says so rather than claiming a lost-count total.
-- If V1 happens to match V0, the program prints
-  `NO RACE OBSERVED THIS RUN — RACES ARE TIMING-DEPENDENT`.
-  A match does not make V1 thread-safe. The three attempts are not required to differ.
-- In benchmark mode, a protected variant that fails validation is recorded as `FAIL`; its
-  speedup and efficiency are `N/A`, and the process exits non-zero.
-
-## 14. Speedup and efficiency
-
-For a measured histogram or LUT time:
-
-```text
-speedup    = baseline_time / measured_time
-efficiency = speedup / actual_threads
-```
-
-The histogram baseline is the sequential V0 time measured for the same image. V0 has
-speedup `1.000` and efficiency `N/A`. V1 has no valid speedup because it is not a correct
-algorithm. A protected variant receives a speedup only when it passed validation. Values
-are reported as `N/A` when a meaningful value cannot be computed, including failed
-validation and unusably small or zero timings; the CSV follows the same rule.
-
-The LUT baseline is the one-thread OpenMP LUT pass. The LUT benchmark is separate from the
-histogram benchmark because applying a 256-entry table does not depend on which histogram
-variant produced the table.
-
-## 15. Reading the benchmark table and CSV
-
-The terminal table shows variant, requested threads, actual threads, median histogram
-time in milliseconds, speedup, efficiency, and correctness. Example headings:
-
-```text
-Variant        Requested  Actual   Median (ms)   Speedup  Efficiency  Correctness
-```
-
-Interpretation notes:
-
-- Compare speedups only for rows marked `PASS`; `FAIL` and `RACE` rows do not have a
-  valid speedup or efficiency.
-- Check actual threads, not just requested threads.
-- A larger thread count is not guaranteed to be faster; synchronization, memory traffic,
-  and thread startup overhead matter.
-- Do not compare a timing from one machine directly with a timing from another machine.
-- The LUT table is a separate measurement using the same image and thread counts.
-
-`results.csv` has these columns:
-
-```text
-variant,requested_threads,actual_threads,median_histogram_ms,speedup,efficiency,
-correctness,median_lut_apply_ms,lut_speedup,lut_efficiency
-```
-
-CSV rows are actual measurements for the current run. `N/A` marks a metric that is not
-meaningful for that row. The LUT columns are measured once per thread count and repeated
-on each variant row that uses that thread count.
-
-### Current measured example (machine-specific)
-
-These values were measured during the final audit on 28 October 2026 with GCC 15.2.0
-(OpenMP 4.5) on an Intel Core i7-1355U with 12 logical processors, using the default
-2048 x 2048 generated image and the committed `output/results.csv`. The OpenMP runtime
-provided the requested team sizes (1, 2, 4, and 12); actual thread counts are shown in the
-CSV. This is one run on one machine, not a portable performance claim. Rerunning the
-benchmark will produce different numbers, especially on a shared or thermally throttled
-machine.
-
-Each cell is `median histogram time (speedup, efficiency)`. V0 is the timing baseline and
-V1 is intentionally unsafe, so their speedup/efficiency fields are `N/A` in the CSV; V1 is
-shown only to report its observed race status.
-
-| Variant | 1 thread | 2 threads | 4 threads | 12 threads |
-|---|---|---|---|---|
-| V0 sequential | 2.409 ms (1.000×, N/A) | — | — | — |
-| V1 unsafe | 2.408 ms (N/A, N/A) | 14.248 ms (N/A, N/A) | 23.515 ms (N/A, N/A) | 44.325 ms (N/A, N/A) |
-| V2 critical | 105.310 ms (0.023×, 0.023) | 331.312 ms (0.007×, 0.004) | 379.662 ms (0.006×, 0.002) | 739.353 ms (0.003×, 0.000) |
-| V3 atomic | 34.726 ms (0.069×, 0.069) | 54.143 ms (0.044×, 0.022) | 62.266 ms (0.039×, 0.010) | 65.238 ms (0.037×, 0.003) |
-| V4 private | 2.910 ms (0.828×, 0.828) | 2.047 ms (1.177×, 0.588) | 1.213 ms (1.986×, 0.496) | 1.274 ms (1.891×, 0.158) |
-| V5 reduction | 3.975 ms (0.606×, 0.606) | 2.106 ms (1.144×, 0.572) | 1.200 ms (2.008×, 0.502) | 1.452 ms (1.659×, 0.138) |
-
-V1's observed correctness statuses for this run were `NO_RACE_OBSERVED` at one thread and
-`RACE` at 2, 4, and 12 threads. A race is timing-dependent, so a different run can produce
-a different result; the status is not a substitute for synchronization.
-
-The separate LUT-application measurement for the same run was:
-
-| Threads | Median LUT ms | Speedup | Efficiency |
-|---:|---:|---:|---:|
-| 1 | 4.047 | 1.000× | 1.000 |
-| 2 | 1.944 | 2.081× | 1.041 |
-| 4 | 1.229 | 3.293× | 0.823 |
-| 12 | 1.111 | 3.643× | 0.304 |
-
-The two-thread LUT efficiency above 1.0 is measurement noise; it is not a claim of
-superlinear scaling. V4 and V5 were the fastest parallel histogram variants in this run,
-but their ranking and speedups varied in repeated runs. The full-precision values are in
-`output/results.csv`; `TESTING.md` records the commands, the broader audit evidence, and a
-separate 256 x 256 submission-verification run. That smaller run was used only for final
-acceptance checking and does not replace this 2048 x 2048 dataset.
-
-## 16. CDF, lookup table, and equalization
-
-1. Build a correct 256-bin histogram with the selected safe variant.
-2. Compute the cumulative distribution function (CDF) sequentially:
-
-   ```text
-   cdf[0] = hist[0]
-   cdf[v] = cdf[v - 1] + hist[v]
-   ```
-
-   Each CDF value depends on the previous one, so this is a loop-carried dependency.
-   With only 256 bins, a sequential loop is simple and appropriate.
-
-3. Find the first nonzero histogram bin and use its CDF value as `cdf_min`. For each
-   intensity `v`:
-
-   ```text
-   lut[v] = round((cdf[v] - cdf_min) * 255.0 / (total_pixels - cdf_min))
-   ```
-
-   The implementation checks `cdf[v] >= cdf_min` before subtracting unsigned values,
-   clamps to 0..255, and uses round-half-up. If the denominator is zero (a uniform image),
-   the LUT preserves the original grayscale values.
-
-4. Apply the LUT with an OpenMP loop using `schedule(static)`:
-
-   ```c
-   #pragma omp parallel for schedule(static)
-   for (size_t i = 0; i < pixel_count; i++) {
-       output[i] = lut[input[i]];
-   }
-   ```
-
-   Each iteration reads its own input pixel and writes a distinct output pixel. The LUT
-   is read-only, so the loop is race-free.
-
-The BMP writer produces uncompressed 24-bit files with row padding, bottom-up row order,
-and BGR byte order. Both grayscale values are copied into all three color channels.
-
-## 17. Limitations
-
-- This is a small CPU-based grayscale image-processing experiment, not a production image
-  library.
-- Timing depends on CPU, cache behavior, compiler, OpenMP runtime, thread count, system
-  load, and image content. Results are not portable performance claims.
-- The image generator and PPM parser intentionally support only the documented formats:
-  low-contrast generated images and binary P6 PPM with maximum value 255.
-- The PPM reader is strict about a single whitespace separator after `maxval` and about the
-  exact raster length. It requires a regular, seekable input file, rejects trailing bytes,
-  and rejects malformed or unsupported headers (including non-ASCII header tokens).
-- `--output` creates only the final directory; create its parent directory yourself if it
-  does not already exist.
-- The CDF is sequential. Only 256 bins are processed, so parallelizing it would add more
-  overhead than useful work in this project.
-- V1 demonstrates a race; its result is timing-dependent and is not a correctness test.
-- The maximum generated size (8192 x 8192) was not exercised end-to-end in the final
-  audit or submission-verification run; it remains untested.
-- Array-section reduction support is a compiler feature. If the compiler cannot build
-  V5, the build fails rather than silently substituting another algorithm.
-
-## 18. Troubleshooting
-
-| Symptom | Likely cause / fix |
-|---|---|
-| `undefined reference to omp_get_...` | OpenMP was not enabled. Use the Makefile or add `-fopenmp`. |
-| Compiler error about `reduction(+:hist[:256])` | The compiler is too old or lacks array-section reductions. Use a modern GCC. |
-| `Error: --threads must be ...` | Thread count must be an integer from 1 to 256. |
-| `Error: --size must be ...` | Generated size must be 16..8192. |
-| `Error: ... is not a binary PPM P6 file` | Use a binary P6 PPM, not ASCII P3. |
-| `PPM raster length mismatch` | Truncated file, extra raster bytes, or an unsupported header layout. |
-| `Error: output file ... is the same file as input ...` | Choose a different `--output` directory; the program will not overwrite the input. |
-| `Error: cannot create output directory ...` | The final directory is created, but its parent must already exist. |
-| Output BMP will not open | Check that the write completed and the filesystem had space; the program reports write failures. |
-| Timings look noisy | Close CPU-heavy programs and rerun. Use the median; do not compare a single run. |
-| `make benchmark` takes longer than expected | Larger `--size` values, high thread counts, and `critical` contention increase runtime. Try `./pixelsprint --benchmark --size 1024`. |
-
-## 19. Student details
-
-Fill in the following fields before submitting the project. They are intentionally blank
-in this template.
-
-```text
-Student 1 Name:
-Student 1 USN:
-
-Student 2 Name:
-Student 2 USN:
-```
+This project is provided for educational purposes.

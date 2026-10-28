@@ -1,0 +1,10 @@
+# Compiled binary
+crowd_sim
+
+# Object files
+*.o
+
+# Editor / OS artefacts
+*.swp
+*~
+.DS_Store
