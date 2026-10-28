@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    actor User as Student / Evaluator
+    participant Browser as Web Browser (app.js)
+    participant Server as Python HTTP Server (server.py)
+    participant CBin as Native Binary (crowd_sim)
+
+    User->>Browser: Selects particles (e.g. 10000), steps (100), threads (4)
+    User->>Browser: Clicks "Run Simulation"
+    Browser->>Browser: Validates client inputs & sets loading state
+    Browser->>Server: POST /api/simulate (JSON payload)
+    Server->>Server: Validates numeric ranges & acquires process lock
+    Server->>CBin: subprocess.run([crowd_sim, --particles, ..., --json])
+    Note over CBin: 1. Deterministic init<br/>2. Sequential run (timed)<br/>3. OpenMP parallel run (timed)<br/>4. Floating-point state compare<br/>5. Boundary audit<br/>6. Density grid computation
+    CBin-->>Server: stdout (JSON string with metrics & grid)
+    Server->>Server: Releases process lock
+    Server-->>Browser: HTTP 200 OK (JSON response)
+    Browser->>Browser: Populates Metrics Table (Time, Speedup, Efficiency)
+    Browser->>Browser: Renders Density Heatmap on HTML Canvas
+    Browser->>Browser: Updates Execution Log with verification status
+    Browser-->>User: Displays completed dashboard & success badge

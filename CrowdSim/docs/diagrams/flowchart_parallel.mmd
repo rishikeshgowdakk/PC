@@ -1,0 +1,24 @@
+flowchart TD
+    Start([Start Parallel Simulation]) --> OuterLoopInit[Step s = 0]
+    OuterLoopInit --> CheckStep{s < Total Steps?}
+    CheckStep -- Yes --> ForkThreads["OpenMP Team Fork (#pragma omp parallel for schedule(static))"]
+    CheckStep -- No --> Finish([End Simulation])
+
+    ForkThreads --> Thread0["Thread 0: Particles 0 .. (N/T - 1)"]
+    ForkThreads --> Thread1["Thread 1: Particles N/T .. (2N/T - 1)"]
+    ForkThreads --> ThreadK["Thread k: Particles kN/T .. ((k+1)N/T - 1)"]
+
+    subgraph ThreadExec ["Independent Thread Work (Zero Data Sharing)"]
+        direction TB
+        Update["Update pos: x += vx, y += vy"]
+        Bounce["Wall reflection (fmod periodic folding)"]
+        Update --> Bounce
+    end
+
+    Thread0 --> ThreadExec
+    Thread1 --> ThreadExec
+    ThreadK --> ThreadExec
+
+    ThreadExec --> Barrier["Implicit OpenMP Barrier (Join)"]
+    Barrier --> NextStep["s++"]
+    NextStep --> CheckStep

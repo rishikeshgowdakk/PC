@@ -4,6 +4,10 @@ crowd_sim
 # Object files
 *.o
 
+# Python artifacts
+__pycache__/
+*.pyc
+
 # Editor / OS artefacts
 *.swp
 *~

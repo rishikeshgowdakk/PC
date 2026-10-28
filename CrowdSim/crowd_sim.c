@@ -8,7 +8,7 @@
  *
  * Build:  gcc -std=c11 -O2 -fopenmp -Wall -Wextra -Wpedantic \
  *              crowd_sim.c -o crowd_sim -lm
- * Usage:  ./crowd_sim [--particles N] [--steps N] [--threads N] [--help]
+ * Usage:  ./crowd_sim [--particles N] [--steps N] [--threads N] [--json] [--help]
  */
 
 #include <stdio.h>
@@ -29,9 +29,13 @@
 /* ── validation tolerance ────────────────────────────────────────────── */
 #define TOLERANCE  1e-9
 
-/* ── ASCII grid dimensions ───────────────────────────────────────────── */
+/* ── ASCII grid dimensions (terminal mode) ───────────────────────────── */
 #define GRID_COLS  50
 #define GRID_ROWS  15
+
+/* ── density grid for JSON mode (higher resolution for canvas) ───────── */
+#define JSON_GRID_COLS  80
+#define JSON_GRID_ROWS  30
 
 /* ── hard limits to prevent accidental huge allocations ───────────────── */
 #define MAX_PARTICLES  50000000   /* 50 million */
@@ -206,6 +210,38 @@ static void print_grid(const Particle *p, int n)
 }
 
 /* ──────────────────────────────────────────────────────────────────────
+ * Build a density grid and print it as a JSON 2-D array.
+ * Used by the web backend to render the Canvas visualisation.
+ * ────────────────────────────────────────────────────────────────────── */
+static void print_density_json(const Particle *p, int n)
+{
+    int grid[JSON_GRID_ROWS][JSON_GRID_COLS];
+    memset(grid, 0, sizeof(grid));
+
+    for (int i = 0; i < n; i++) {
+        int col = (int)(p[i].x / ENV_WIDTH  * JSON_GRID_COLS);
+        int row = (int)(p[i].y / ENV_HEIGHT * JSON_GRID_ROWS);
+        if (col < 0) col = 0;
+        if (col >= JSON_GRID_COLS) col = JSON_GRID_COLS - 1;
+        if (row < 0) row = 0;
+        if (row >= JSON_GRID_ROWS) row = JSON_GRID_ROWS - 1;
+        grid[row][col]++;
+    }
+
+    printf("[");
+    for (int r = 0; r < JSON_GRID_ROWS; r++) {
+        if (r > 0) printf(",");
+        printf("[");
+        for (int c = 0; c < JSON_GRID_COLS; c++) {
+            if (c > 0) printf(",");
+            printf("%d", grid[r][c]);
+        }
+        printf("]");
+    }
+    printf("]");
+}
+
+/* ──────────────────────────────────────────────────────────────────────
  * Print usage information.
  * ────────────────────────────────────────────────────────────────────── */
 static void print_usage(const char *prog)
@@ -215,6 +251,7 @@ static void print_usage(const char *prog)
            "  --particles N   Number of particles (default %d, max %d)\n"
            "  --steps N       Number of simulation steps (default %d, max %d)\n"
            "  --threads N     Number of OpenMP threads (default %d, max %d)\n"
+           "  --json          Output results as JSON (for web backend)\n"
            "  --help          Show this help message\n",
            prog,
            DEFAULT_PARTICLES, MAX_PARTICLES,
@@ -247,12 +284,15 @@ int main(int argc, char *argv[])
     int num_particles = DEFAULT_PARTICLES;
     int num_steps     = DEFAULT_STEPS;
     int num_threads   = DEFAULT_THREADS;
+    int json_mode     = 0;
 
     /* ── parse command-line arguments ────────────────────────────────── */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
+        } else if (strcmp(argv[i], "--json") == 0) {
+            json_mode = 1;
         } else if (strcmp(argv[i], "--particles") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: --particles requires a value.\n");
@@ -322,14 +362,6 @@ int main(int argc, char *argv[])
     memcpy(seq, init, sz);
     memcpy(par, init, sz);
 
-    /* ── print header ───────────────────────────────────────────────── */
-    printf("\n==========================================\n");
-    printf("   CrowdSim - Parallel Particle Simulator\n");
-    printf("==========================================\n\n");
-    printf("Particles:             %d\n",   num_particles);
-    printf("Simulation steps:      %d\n",   num_steps);
-    printf("OpenMP threads:        %d\n\n", num_threads);
-
     /* ── sequential run ─────────────────────────────────────────────── */
     double t_seq_start = omp_get_wtime();
     simulate_sequential(seq, num_particles, num_steps);
@@ -346,23 +378,51 @@ int main(int argc, char *argv[])
     double speedup    = (t_par_ms > 1e-6) ? t_seq_ms / t_par_ms : 0.0;
     double efficiency = speedup / (double)num_threads * 100.0;
 
-    printf("Sequential time:       %.3f ms\n",  t_seq_ms);
-    printf("Parallel time:         %.3f ms\n",  t_par_ms);
-    printf("Speedup:               %.2fx\n",    speedup);
-    printf("Parallel efficiency:   %.1f%%\n\n", efficiency);
-
     /* ── correctness checks ─────────────────────────────────────────── */
     int match  = compare_results(seq, par, num_particles);
     int bounds = validate_bounds(seq, num_particles) &&
                  validate_bounds(par, num_particles);
 
-    printf("Sequential/parallel results: %s\n", match  ? "MATCH" : "MISMATCH");
-    printf("Boundary validation:         %s\n", bounds ? "PASS"  : "FAIL");
+    if (json_mode) {
+        /* ── JSON output for the web backend ─────────────────────────── */
+        printf("{");
+        printf("\"particles\":%d,", num_particles);
+        printf("\"steps\":%d,", num_steps);
+        printf("\"threads\":%d,", num_threads);
+        printf("\"seq_time_ms\":%.3f,", t_seq_ms);
+        printf("\"par_time_ms\":%.3f,", t_par_ms);
+        printf("\"speedup\":%.4f,", speedup);
+        printf("\"efficiency\":%.2f,", efficiency);
+        printf("\"match\":%s,", match ? "true" : "false");
+        printf("\"bounds\":%s,", bounds ? "true" : "false");
+        printf("\"env_width\":%.1f,", ENV_WIDTH);
+        printf("\"env_height\":%.1f,", ENV_HEIGHT);
+        printf("\"grid_cols\":%d,", JSON_GRID_COLS);
+        printf("\"grid_rows\":%d,", JSON_GRID_ROWS);
+        printf("\"density\":");
+        print_density_json(seq, num_particles);
+        printf("}\n");
+    } else {
+        /* ── normal terminal output ──────────────────────────────────── */
+        printf("\n==========================================\n");
+        printf("   CrowdSim - Parallel Particle Simulator\n");
+        printf("==========================================\n\n");
+        printf("Particles:             %d\n",   num_particles);
+        printf("Simulation steps:      %d\n",   num_steps);
+        printf("OpenMP threads:        %d\n\n", num_threads);
 
-    /* ── ASCII visualisation ────────────────────────────────────────── */
-    printf("\nFinal particle distribution (sequential):\n");
-    print_grid(seq, num_particles);
-    printf("\n");
+        printf("Sequential time:       %.3f ms\n",  t_seq_ms);
+        printf("Parallel time:         %.3f ms\n",  t_par_ms);
+        printf("Speedup:               %.2fx\n",    speedup);
+        printf("Parallel efficiency:   %.1f%%\n\n", efficiency);
+
+        printf("Sequential/parallel results: %s\n", match  ? "MATCH" : "MISMATCH");
+        printf("Boundary validation:         %s\n", bounds ? "PASS"  : "FAIL");
+
+        printf("\nFinal particle distribution (sequential):\n");
+        print_grid(seq, num_particles);
+        printf("\n");
+    }
 
     /* ── clean up ───────────────────────────────────────────────────── */
     free(init);

@@ -1,0 +1,42 @@
+graph TD
+    subgraph Browser ["Web Browser (User Interface)"]
+        UI["HTML5 / CSS3 / Vanilla JavaScript Dashboard"]
+        Canvas["HTML5 Canvas (Particle Distribution Map)"]
+        MetricsTable["Metrics Table (Runtime, Speedup, Efficiency)"]
+        Controls["Simulation Parameter Form (Particles, Steps, Threads)"]
+    end
+
+    subgraph Backend ["Local Python HTTP Server (127.0.0.1:8080)"]
+        PyServer["server.py (Python stdlib http.server)"]
+        Validator["Input Validation & Range Checking"]
+        LockMgr["Concurrency Control (Thread Lock)"]
+        Subproc["Subprocess Execution Controller"]
+    end
+
+    subgraph NativeEngine ["C / OpenMP Simulation Binary (crowd_sim)"]
+        Main["main() & Argument Parsing"]
+        Init["Deterministic Particle Initialisation"]
+        SeqEngine["Sequential Simulation Engine (Single-threaded)"]
+        ParEngine["OpenMP Parallel Simulation Engine (#pragma omp parallel for)"]
+        Reflect["2D Wall Reflection & Folding Math"]
+        ValidatorEngine["Verification (State Comparator & Boundary Checks)"]
+        JSONOut["JSON Metrics & Density Grid Generator"]
+    end
+
+    Controls -->|"HTTP POST /api/simulate (JSON)"| PyServer
+    PyServer --> Validator
+    Validator --> LockMgr
+    LockMgr --> Subproc
+    Subproc -->|"Executes with --json flag"| Main
+    Main --> Init
+    Init --> SeqEngine
+    Init --> ParEngine
+    SeqEngine --> Reflect
+    ParEngine --> Reflect
+    SeqEngine --> ValidatorEngine
+    ParEngine --> ValidatorEngine
+    ValidatorEngine --> JSONOut
+    JSONOut -->|"stdout (JSON string)"| Subproc
+    Subproc -->|"HTTP 200 JSON Response"| UI
+    UI --> Canvas
+    UI --> MetricsTable

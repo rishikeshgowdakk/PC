@@ -6,8 +6,9 @@ CFLAGS  = -std=c11 -O2 -fopenmp -Wall -Wextra -Wpedantic
 LDFLAGS = -fopenmp -lm
 TARGET  = crowd_sim
 SRC     = crowd_sim.c
+PYTHON  = python3
 
-.PHONY: all run test clean
+.PHONY: all run test web clean
 
 all: $(TARGET)
 
@@ -16,6 +17,11 @@ $(TARGET): $(SRC)
 
 run: $(TARGET)
 	./$(TARGET)
+
+# ── Launch web frontend ──────────────────────────────────────────────
+web: $(TARGET)
+	@echo "Starting CrowdSim web dashboard on http://127.0.0.1:8080 ..."
+	$(PYTHON) server.py
 
 # ── Automated test suite ─────────────────────────────────────────────
 # Each test uses a small workload so the full suite finishes in seconds.

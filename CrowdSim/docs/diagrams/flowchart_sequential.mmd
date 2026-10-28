@@ -1,0 +1,15 @@
+flowchart TD
+    Start([Start Sequential Simulation]) --> OuterLoopInit[Step s = 0]
+    OuterLoopInit --> CheckStep{s < Total Steps?}
+    CheckStep -- Yes --> InnerLoopInit[Particle i = 0]
+    CheckStep -- No --> Finish([End Simulation])
+
+    InnerLoopInit --> CheckParticle{i < Particle Count N?}
+    CheckParticle -- Yes --> UpdatePos["p[i].x += p[i].vx<br/>p[i].y += p[i].vy"]
+    UpdatePos --> BoundaryX["reflect(&p[i].x, &p[i].vx, 100.0)"]
+    BoundaryX --> BoundaryY["reflect(&p[i].y, &p[i].vy, 40.0)"]
+    BoundaryY --> NextParticle["i++"]
+    NextParticle --> CheckParticle
+
+    CheckParticle -- No --> NextStep["s++"]
+    NextStep --> CheckStep

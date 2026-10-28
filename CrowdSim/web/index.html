@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrowdSim — Parallel Particle Simulator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- ── header ─────────────────────────────────────────────────── -->
+    <header>
+        <h1>⚛ CrowdSim</h1>
+        <p class="subtitle">Sequential vs OpenMP Parallel Particle Simulation</p>
+    </header>
+
+    <main>
+        <!-- ── left: controls ─────────────────────────────────────── -->
+        <aside class="panel controls">
+            <h2>Simulation Parameters</h2>
+
+            <label for="inp-particles">Particles</label>
+            <input id="inp-particles" type="number" min="1" max="5000000"
+                   value="10000" step="1000">
+
+            <label for="inp-steps">Simulation Steps</label>
+            <input id="inp-steps" type="number" min="1" max="1000000"
+                   value="100" step="50">
+
+            <label for="inp-threads">OpenMP Threads</label>
+            <input id="inp-threads" type="number" min="1" max="64"
+                   value="4" step="1">
+
+            <div class="btn-row">
+                <button id="btn-run" class="btn primary">▶ Run Simulation</button>
+                <button id="btn-reset" class="btn secondary">↺ Reset</button>
+            </div>
+
+            <div id="status-msg" class="status"></div>
+
+            <!-- ── explanation ────────────────────────────────────── -->
+            <details class="info-box">
+                <summary>What do these metrics mean?</summary>
+                <dl>
+                    <dt>Sequential time</dt>
+                    <dd>Time taken by a single-threaded loop over all particles × all steps.</dd>
+                    <dt>Parallel time</dt>
+                    <dd>Time taken when the particle loop is distributed across multiple OpenMP threads.</dd>
+                    <dt>Speedup</dt>
+                    <dd>Sequential time ÷ Parallel time. A speedup of 2× means the parallel version finished in half the time.</dd>
+                    <dt>Efficiency</dt>
+                    <dd>(Speedup ÷ Threads) × 100%. Shows how effectively each thread was utilised. 100% is ideal but rarely achieved due to overhead.</dd>
+                    <dt>Match</dt>
+                    <dd>Both implementations must produce identical particle states (within floating-point tolerance). This proves the parallel version is correct.</dd>
+                    <dt>Bounds</dt>
+                    <dd>Every particle must remain inside the 100 × 40 simulation area after all steps.</dd>
+                </dl>
+            </details>
+
+            <details class="info-box">
+                <summary>About this project</summary>
+                <p>
+                    <strong>CrowdSim</strong> is a VTU Parallel Computing mini-project
+                    that demonstrates shared-memory parallelism using OpenMP in C.
+                </p>
+                <p>
+                    <strong>Module 2</strong> — Performance measurement, speedup, and
+                    efficiency of parallel programs.<br>
+                    <strong>Module 4</strong> — OpenMP directives, <code>#pragma omp
+                    parallel for</code>, static scheduling, variable scoping, and
+                    thread safety.
+                </p>
+                <p>
+                    The actual computation runs in a compiled C binary.
+                    This dashboard displays the real results returned by that program.
+                </p>
+            </details>
+        </aside>
+
+        <!-- ── centre: visualisation ──────────────────────────────── -->
+        <section class="panel viz">
+            <h2>Particle Distribution</h2>
+            <div class="canvas-wrap">
+                <canvas id="sim-canvas" width="800" height="360"></canvas>
+            </div>
+            <div class="legend">
+                <span class="swatch low"></span> Low density
+                <span class="swatch med"></span> Medium
+                <span class="swatch high"></span> High
+                <span class="swatch very-high"></span> Very high
+            </div>
+        </section>
+
+        <!-- ── right: results ─────────────────────────────────────── -->
+        <aside class="panel results">
+            <h2>Results</h2>
+            <table class="metrics">
+                <tr><th>Particles</th>       <td id="r-particles">—</td></tr>
+                <tr><th>Steps</th>           <td id="r-steps">—</td></tr>
+                <tr><th>Threads</th>         <td id="r-threads">—</td></tr>
+                <tr class="sep"><td colspan="2"></td></tr>
+                <tr><th>Sequential time</th> <td id="r-seq">—</td></tr>
+                <tr><th>Parallel time</th>   <td id="r-par">—</td></tr>
+                <tr><th>Speedup</th>         <td id="r-speedup">—</td></tr>
+                <tr><th>Efficiency</th>      <td id="r-eff">—</td></tr>
+                <tr class="sep"><td colspan="2"></td></tr>
+                <tr><th>Correctness</th>     <td id="r-match">—</td></tr>
+                <tr><th>Bounds check</th>    <td id="r-bounds">—</td></tr>
+            </table>
+
+            <!-- ── execution log ──────────────────────────────────── -->
+            <h3>Execution Log</h3>
+            <div id="exec-log" class="exec-log">
+                <p class="log-placeholder">Run a simulation to see the log.</p>
+            </div>
+        </aside>
+    </main>
+
+    <footer>
+        CrowdSim — VTU Parallel Computing Mini-Project &middot;
+        Sequential &amp; OpenMP Particle Simulator
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
