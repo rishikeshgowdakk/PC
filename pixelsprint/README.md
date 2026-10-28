@@ -151,9 +151,13 @@ Benchmark details:
 - the median of the seven repetitions is reported;
 - the histogram is zeroed outside the timer before every repetition;
 - private-histogram workspace allocation and zeroing are outside the histogram timer;
+  V4's final merge is included in its timed histogram operation, just as V5's reduction
+  combine step is part of its timed operation;
 - image generation, allocation, comparison, printing, and I/O are outside timers;
 - LUT application is measured separately with its own warm-up and seven repetitions;
-- V1 is marked as unsafe/race-affected and is never presented as a valid speedup.
+- V1 is marked as unsafe/race-affected and is never presented as a valid speedup;
+- a protected variant that fails validation is marked `FAIL`; its speedup and efficiency
+  are `N/A`, and the process exits non-zero.
 
 ## 11. Command-line option reference
 
@@ -167,8 +171,8 @@ Benchmark details:
 --threads T             Requested OpenMP threads, 1..256. Default: runtime maximum.
 --variant NAME          sequential|unsafe|critical|atomic|private|reduction.
                         Default for normal processing/demo equalization: reduction.
---input FILE.ppm        Read a binary PPM P6 image (maximum channel value 255).
---output DIR            Output directory. Default: output/.
+--input FILE.ppm        Read a regular, seekable binary PPM P6 image (maximum value 255).
+--output DIR            Output directory. Default: output/; its parent must exist.
 ```
 
 Option interaction rules:
@@ -178,6 +182,11 @@ Option interaction rules:
 - `--size` and `--input` are mutually exclusive; a PPM supplies its own dimensions.
 - `--variant` cannot be combined with `--benchmark`, because every variant is tested.
 - Duplicate options and unknown options are rejected with a non-zero exit status.
+- `--output` creates the final directory if needed; its parent directory must already
+  exist.
+- The program refuses to overwrite the input: if a planned output file (`before.bmp`,
+  `after.bmp`, or `results.csv`) resolves to the same file as `--input`, it exits with an
+  error before writing.
 - `--threads` is a request. The program prints the actual thread count reported by the
   OpenMP runtime. If fewer threads are supplied, the actual number is used in efficiency.
 - In demo mode, `--variant` selects the safe histogram used for equalization. All
@@ -201,6 +210,11 @@ Errors are written to standard error and return a non-zero exit status.
 
 All parallel histogram loops use `schedule(static)`.
 
+V4 sizes its workspace for the requested team (an upper bound). It records the actual
+team size before indexing the workspace, merges only that many private histograms, and
+fails safely instead of writing out of bounds if a runtime ever supplies more threads
+than the workspace can hold.
+
 ## 13. Correctness and race detection
 
 For every variant the program prints the pixel count, the histogram total, the number of
@@ -215,6 +229,8 @@ bins that differ from V0, and a status.
 - If V1 happens to match V0, the program prints
   `NO RACE OBSERVED THIS RUN — RACES ARE TIMING-DEPENDENT`.
   A match does not make V1 thread-safe. The three attempts are not required to differ.
+- In benchmark mode, a protected variant that fails validation is recorded as `FAIL`; its
+  speedup and efficiency are `N/A`, and the process exits non-zero.
 
 ## 14. Speedup and efficiency
 
@@ -227,8 +243,9 @@ efficiency = speedup / actual_threads
 
 The histogram baseline is the sequential V0 time measured for the same image. V0 has
 speedup `1.000` and efficiency `N/A`. V1 has no valid speedup because it is not a correct
-algorithm. Values are printed as `N/A` when a meaningful value cannot be computed,
-including unusably small or zero timings.
+algorithm. A protected variant receives a speedup only when it passed validation. Values
+are reported as `N/A` when a meaningful value cannot be computed, including failed
+validation and unusably small or zero timings; the CSV follows the same rule.
 
 The LUT baseline is the one-thread OpenMP LUT pass. The LUT benchmark is separate from the
 histogram benchmark because applying a 256-entry table does not depend on which histogram
@@ -245,7 +262,8 @@ Variant        Requested  Actual   Median (ms)   Speedup  Efficiency  Correctnes
 
 Interpretation notes:
 
-- Compare speedups only for rows marked `PASS`.
+- Compare speedups only for rows marked `PASS`; `FAIL` and `RACE` rows do not have a
+  valid speedup or efficiency.
 - Check actual threads, not just requested threads.
 - A larger thread count is not guaranteed to be faster; synchronization, memory traffic,
   and thread startup overhead matter.
@@ -311,7 +329,10 @@ and BGR byte order. Both grayscale values are copied into all three color channe
 - The image generator and PPM parser intentionally support only the documented formats:
   low-contrast generated images and binary P6 PPM with maximum value 255.
 - The PPM reader is strict about a single whitespace separator after `maxval` and about the
-  exact raster length; malformed or unsupported headers are rejected.
+  exact raster length. It requires a regular, seekable input file, rejects trailing bytes,
+  and rejects malformed or unsupported headers (including non-ASCII header tokens).
+- `--output` creates only the final directory; create its parent directory yourself if it
+  does not already exist.
 - The CDF is sequential. Only 256 bins are processed, so parallelizing it would add more
   overhead than useful work in this project.
 - V1 demonstrates a race; its result is timing-dependent and is not a correctness test.
@@ -328,6 +349,8 @@ and BGR byte order. Both grayscale values are copied into all three color channe
 | `Error: --size must be ...` | Generated size must be 16..8192. |
 | `Error: ... is not a binary PPM P6 file` | Use a binary P6 PPM, not ASCII P3. |
 | `PPM raster length mismatch` | Truncated file, extra raster bytes, or an unsupported header layout. |
+| `Error: output file ... is the same file as input ...` | Choose a different `--output` directory; the program will not overwrite the input. |
+| `Error: cannot create output directory ...` | The final directory is created, but its parent must already exist. |
 | Output BMP will not open | Check that the write completed and the filesystem had space; the program reports write failures. |
 | Timings look noisy | Close CPU-heavy programs and rerun. Use the median; do not compare a single run. |
 | `make benchmark` takes longer than expected | Larger `--size` values, high thread counts, and `critical` contention increase runtime. Try `./pixelsprint --benchmark --size 1024`. |

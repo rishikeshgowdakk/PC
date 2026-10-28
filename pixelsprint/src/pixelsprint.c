@@ -139,6 +139,24 @@ static bool checked_pixel_count(int width, int height, size_t *pixel_count)
     return true;
 }
 
+static bool histogram_workspace_bytes(int threads, size_t *bytes)
+{
+    if (threads <= 0 || bytes == NULL) {
+        return false;
+    }
+    if ((size_t)threads > SIZE_MAX / (size_t)HISTOGRAM_BINS) {
+        return false;
+    }
+
+    size_t counters = (size_t)threads * (size_t)HISTOGRAM_BINS;
+    if (counters > SIZE_MAX / sizeof(hist_t)) {
+        return false;
+    }
+
+    *bytes = counters * sizeof(hist_t);
+    return true;
+}
+
 static bool parse_positive_int(const char *text, long maximum, int *value)
 {
     if (text == NULL || *text == '\0') {
@@ -188,6 +206,52 @@ static bool join_path(char *destination, size_t capacity,
 {
     int written = snprintf(destination, capacity, "%s/%s", directory, file_name);
     return written >= 0 && (size_t)written < capacity;
+}
+
+static bool same_existing_file(const char *first, const char *second)
+{
+    struct stat first_status;
+    struct stat second_status;
+
+    if (stat(first, &first_status) != 0 || stat(second, &second_status) != 0) {
+        return false;
+    }
+    return first_status.st_dev == second_status.st_dev &&
+           first_status.st_ino == second_status.st_ino;
+}
+
+static bool validate_output_paths(const Options *options)
+{
+    if (!options->input_set) {
+        return true;
+    }
+
+    const char *file_names[2];
+    int file_name_count = 0;
+
+    if (options->mode == MODE_BENCHMARK) {
+        file_names[file_name_count++] = "results.csv";
+    } else {
+        file_names[file_name_count++] = "before.bmp";
+        file_names[file_name_count++] = "after.bmp";
+    }
+
+    for (int i = 0; i < file_name_count; i++) {
+        char path[PATH_BUFFER_SIZE];
+        if (!join_path(path, sizeof(path), options->output_dir, file_names[i])) {
+            fprintf(stderr, "Error: output path is too long.\n");
+            return false;
+        }
+        if (same_existing_file(options->input_path, path)) {
+            fprintf(stderr,
+                    "Error: output file '%s' is the same file as input '%s'.\n",
+                    path, options->input_path);
+            fprintf(stderr,
+                    "Choose a different --output directory so the input is not overwritten.\n");
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool ensure_output_directory(const char *path)
@@ -466,6 +530,14 @@ static bool read_ppm_token(FILE *file, char *buffer, size_t capacity)
     while (character != EOF &&
            !isspace((unsigned char)character) &&
            character != '#') {
+        /*
+         * PPM header tokens are printable ASCII.  Reject control bytes such
+         * as NUL so a malformed token cannot be truncated by strcmp() and
+         * mistaken for a valid magic number or numeric field.
+         */
+        if (character < 33 || character > 126) {
+            return false;
+        }
         if (length + 1U >= capacity) {
             return false;
         }
@@ -488,6 +560,19 @@ static bool load_ppm_image(const char *path, Image *image)
     if (file == NULL) {
         fprintf(stderr, "Error: cannot open input file '%s': %s\n",
                 path, strerror(errno));
+        return false;
+    }
+
+    struct stat file_status;
+    if (fstat(fileno(file), &file_status) != 0) {
+        fprintf(stderr, "Error: cannot inspect input file '%s': %s\n",
+                path, strerror(errno));
+        fclose(file);
+        return false;
+    }
+    if (!S_ISREG(file_status.st_mode)) {
+        fprintf(stderr, "Error: input file '%s' must be a regular file.\n", path);
+        fclose(file);
         return false;
     }
 
@@ -688,26 +773,60 @@ static void histogram_atomic(const unsigned char *gray, size_t pixel_count,
  * private histograms sequentially into the caller's histogram.  The merge is
  * race-free because it is outside the parallel region.  The workspace and its
  * zeroing are prepared outside the timed counting step by the caller.
+ *
+ * The workspace is sized for the requested team, which is an upper bound on
+ * the actual team.  The team size is checked before indexing; only the actual
+ * team's private histograms are merged, and a larger-than-expected team fails
+ * safely instead of writing out of bounds.
  */
-static void histogram_private(const unsigned char *gray, size_t pixel_count,
+static bool histogram_private(const unsigned char *gray, size_t pixel_count,
                               hist_t *histogram, hist_t *workspace,
                               int workspace_threads, int *actual_threads)
 {
+    if (workspace == NULL || workspace_threads <= 0 || actual_threads == NULL) {
+        fprintf(stderr, "Error: invalid private-histogram workspace.\n");
+        return false;
+    }
+
     *actual_threads = 1;
+    int team_too_large = 0;
 
     #pragma omp parallel num_threads(workspace_threads)
     {
-        int thread_id = omp_get_thread_num();
-        hist_t *private_histogram =
-            workspace + (size_t)thread_id * (size_t)HISTOGRAM_BINS;
+        int team_size = omp_get_num_threads();
 
+        /*
+         * Record the real team size before any thread indexes the workspace.
+         * The single construct has an implicit barrier, so every thread sees
+         * the same check result.  OpenMP may provide fewer threads than
+         * requested, but this guard also keeps a non-conforming runtime from
+         * causing an out-of-bounds write.
+         */
         #pragma omp single
-        *actual_threads = omp_get_num_threads();
-
-        #pragma omp for schedule(static)
-        for (size_t i = 0; i < pixel_count; i++) {
-            private_histogram[gray[i]]++;
+        {
+            *actual_threads = team_size;
+            if (team_size > workspace_threads) {
+                team_too_large = 1;
+            }
         }
+
+        if (!team_too_large) {
+            int thread_id = omp_get_thread_num();
+            hist_t *private_histogram =
+                workspace + (size_t)thread_id * (size_t)HISTOGRAM_BINS;
+
+            #pragma omp for schedule(static)
+            for (size_t i = 0; i < pixel_count; i++) {
+                private_histogram[gray[i]]++;
+            }
+        }
+    }
+
+    if (team_too_large) {
+        fprintf(stderr,
+                "Error: OpenMP created %d threads, but the private-histogram workspace holds only %d.\n",
+                *actual_threads, workspace_threads);
+        return false;
     }
 
     /* Sequential merge: no other thread is touching histogram here. */
@@ -718,6 +837,7 @@ static void histogram_private(const unsigned char *gray, size_t pixel_count,
             histogram[bin] += private_histogram[bin];
         }
     }
+    return true;
 }
 
 /*
@@ -736,7 +856,7 @@ static void histogram_reduction(const unsigned char *gray, size_t pixel_count,
     }
 }
 
-static void run_histogram_once(HistVariant variant, const unsigned char *gray,
+static bool run_histogram_once(HistVariant variant, const unsigned char *gray,
                                size_t pixel_count, hist_t *histogram,
                                hist_t *workspace, int workspace_threads,
                                int *actual_threads)
@@ -755,25 +875,30 @@ static void run_histogram_once(HistVariant variant, const unsigned char *gray,
         histogram_atomic(gray, pixel_count, histogram);
         break;
     case VARIANT_PRIVATE:
-        histogram_private(gray, pixel_count, histogram, workspace,
-                          workspace_threads, actual_threads);
-        break;
+        return histogram_private(gray, pixel_count, histogram, workspace,
+                                 workspace_threads, actual_threads);
     case VARIANT_REDUCTION:
         histogram_reduction(gray, pixel_count, histogram);
         break;
+    default:
+        fprintf(stderr, "Error: unknown histogram variant %d.\n", (int)variant);
+        return false;
     }
+    return true;
 }
 
-static double timed_histogram_once(HistVariant variant, const unsigned char *gray,
-                                   size_t pixel_count, hist_t *histogram,
-                                   hist_t *workspace, int workspace_threads,
-                                   int *actual_threads)
+static bool timed_histogram_once(HistVariant variant, const unsigned char *gray,
+                                 size_t pixel_count, hist_t *histogram,
+                                 hist_t *workspace, int workspace_threads,
+                                 int *actual_threads, double *elapsed_ms)
 {
     double start = omp_get_wtime();
-    run_histogram_once(variant, gray, pixel_count, histogram, workspace,
-                       workspace_threads, actual_threads);
+    bool success = run_histogram_once(variant, gray, pixel_count, histogram,
+                                      workspace, workspace_threads,
+                                      actual_threads);
     double end = omp_get_wtime();
-    return (end - start) * 1000.0;
+    *elapsed_ms = (end - start) * 1000.0;
+    return success;
 }
 
 static int compare_histograms(const hist_t *reference, const hist_t *candidate,
@@ -1224,23 +1349,33 @@ static int run_demo(const Options *options, int width, int height,
         int workspace_threads = 0;
 
         if (variant == VARIANT_PRIVATE) {
-            workspace_threads = omp_get_max_threads();
+            workspace_threads = options->threads;
             if (workspace_threads < 1) {
                 workspace_threads = 1;
             }
-            workspace = (hist_t *)calloc(
-                (size_t)workspace_threads * (size_t)HISTOGRAM_BINS,
-                sizeof(hist_t));
+            size_t workspace_bytes = 0;
+            if (!histogram_workspace_bytes(workspace_threads, &workspace_bytes)) {
+                fprintf(stderr,
+                        "Error: private histogram workspace size overflows for %d threads.\n",
+                        workspace_threads);
+                return 1;
+            }
+            workspace = (hist_t *)calloc(1U, workspace_bytes);
             if (workspace == NULL) {
                 fprintf(stderr,
-                        "Error: cannot allocate private histogram workspace (%d threads).\n",
-                        workspace_threads);
+                        "Error: cannot allocate private histogram workspace (%zu bytes, %d threads).\n",
+                        workspace_bytes, workspace_threads);
                 return 1;
             }
         }
 
-        run_histogram_once((HistVariant)variant, gray, pixel_count, histogram,
-                           workspace, workspace_threads, &variant_threads);
+        if (!run_histogram_once((HistVariant)variant, gray, pixel_count,
+                                histogram, workspace, workspace_threads,
+                                &variant_threads)) {
+            free(workspace);
+            fprintf(stderr, "Error: histogram variant failed during execution.\n");
+            return 1;
+        }
         free(workspace);
 
         int different_bins = 0;
@@ -1329,23 +1464,33 @@ static int run_normal(const Options *options, int width, int height,
         int variant_threads = actual_threads;
 
         if (options->variant == VARIANT_PRIVATE) {
-            workspace_threads = omp_get_max_threads();
+            workspace_threads = options->threads;
             if (workspace_threads < 1) {
                 workspace_threads = 1;
             }
-            workspace = (hist_t *)calloc(
-                (size_t)workspace_threads * (size_t)HISTOGRAM_BINS,
-                sizeof(hist_t));
+            size_t workspace_bytes = 0;
+            if (!histogram_workspace_bytes(workspace_threads, &workspace_bytes)) {
+                fprintf(stderr,
+                        "Error: private histogram workspace size overflows for %d threads.\n",
+                        workspace_threads);
+                return 1;
+            }
+            workspace = (hist_t *)calloc(1U, workspace_bytes);
             if (workspace == NULL) {
                 fprintf(stderr,
-                        "Error: cannot allocate private histogram workspace (%d threads).\n",
-                        workspace_threads);
+                        "Error: cannot allocate private histogram workspace (%zu bytes, %d threads).\n",
+                        workspace_bytes, workspace_threads);
                 return 1;
             }
         }
 
-        run_histogram_once(options->variant, gray, pixel_count, selected,
-                           workspace, workspace_threads, &variant_threads);
+        if (!run_histogram_once(options->variant, gray, pixel_count, selected,
+                                workspace, workspace_threads,
+                                &variant_threads)) {
+            free(workspace);
+            fprintf(stderr, "Error: histogram variant failed during execution.\n");
+            return 1;
+        }
         free(workspace);
 
         int different_bins = 0;
@@ -1396,6 +1541,13 @@ static bool measure_histogram(HistVariant variant, const unsigned char *gray,
     int actual_threads = detect_actual_threads(requested_threads);
     bool have_failure_details = false;
 
+    size_t workspace_bytes = 0;
+    if (workspace != NULL &&
+        !histogram_workspace_bytes(workspace_threads, &workspace_bytes)) {
+        fprintf(stderr, "Error: invalid private histogram workspace size.\n");
+        return false;
+    }
+
     memset(result, 0, sizeof(*result));
     result->requested_threads = requested_threads;
     result->all_match = true;
@@ -1403,11 +1555,14 @@ static bool measure_histogram(HistVariant variant, const unsigned char *gray,
     /* One warm-up run, not included in the median. */
     memset(histogram, 0, sizeof(histogram));
     if (workspace != NULL) {
-        memset(workspace, 0,
-               (size_t)workspace_threads * (size_t)HISTOGRAM_BINS * sizeof(hist_t));
+        memset(workspace, 0, workspace_bytes);
     }
-    timed_histogram_once(variant, gray, pixel_count, histogram, workspace,
-                         workspace_threads, &actual_threads);
+    double warmup_ms = 0.0;
+    if (!timed_histogram_once(variant, gray, pixel_count, histogram, workspace,
+                              workspace_threads, &actual_threads, &warmup_ms)) {
+        return false;
+    }
+    (void)warmup_ms;
 
     int different_bins = 0;
     hist_t total = 0;
@@ -1421,12 +1576,13 @@ static bool measure_histogram(HistVariant variant, const unsigned char *gray,
     for (int repetition = 0; repetition < BENCHMARK_REPETITIONS; repetition++) {
         memset(histogram, 0, sizeof(histogram));
         if (workspace != NULL) {
-            memset(workspace, 0,
-                   (size_t)workspace_threads * (size_t)HISTOGRAM_BINS * sizeof(hist_t));
+            memset(workspace, 0, workspace_bytes);
         }
-        times[repetition] = timed_histogram_once(
-            variant, gray, pixel_count, histogram, workspace,
-            workspace_threads, &actual_threads);
+        if (!timed_histogram_once(variant, gray, pixel_count, histogram,
+                                  workspace, workspace_threads, &actual_threads,
+                                  &times[repetition])) {
+            return false;
+        }
 
         if (!compare_histograms(reference, histogram, pixel_count,
                                 &different_bins, &total)) {
@@ -1514,7 +1670,7 @@ static bool write_results_csv(const char *path, const BenchmarkRow *rows,
             break;
         }
 
-        if (rows[row].efficiency_not_applicable) {
+        if (rows[row].efficiency_not_applicable || !rows[row].has_speedup) {
             if (fprintf(file, "N/A,") < 0) {
                 success = false;
                 break;
@@ -1615,7 +1771,8 @@ static int run_benchmark(const Options *options, int width, int height,
     }
     printf("Histogram timing: 1 warm-up run + %d measured repetitions per case; median shown.\n",
            BENCHMARK_REPETITIONS);
-    printf("Only histogram counting is timed.  Allocation, zeroing, comparison, and I/O are outside the timer.\n");
+    printf("Only the histogram operation is timed; V4's final merge is included, while allocation,\n");
+    printf("zeroing, comparison, and I/O are outside the timer.\n");
     printf("The sequential V0 measurement is the speedup baseline.\n\n");
 
     /* Build the correctness reference before measuring anything. */
@@ -1680,17 +1837,23 @@ static int run_benchmark(const Options *options, int width, int height,
             hist_t *workspace = NULL;
             int workspace_threads = 0;
             if (variant == VARIANT_PRIVATE) {
-                workspace_threads = omp_get_max_threads();
+                workspace_threads = requested_threads;
                 if (workspace_threads < 1) {
                     workspace_threads = 1;
                 }
-                workspace = (hist_t *)calloc(
-                    (size_t)workspace_threads * (size_t)HISTOGRAM_BINS,
-                    sizeof(hist_t));
+                size_t workspace_bytes = 0;
+                if (!histogram_workspace_bytes(workspace_threads,
+                                               &workspace_bytes)) {
+                    fprintf(stderr,
+                            "Error: private histogram workspace size overflows for %d threads.\n",
+                            workspace_threads);
+                    return 1;
+                }
+                workspace = (hist_t *)calloc(1U, workspace_bytes);
                 if (workspace == NULL) {
                     fprintf(stderr,
-                            "Error: cannot allocate private histogram workspace (%d threads).\n",
-                            workspace_threads);
+                            "Error: cannot allocate private histogram workspace (%zu bytes, %d threads).\n",
+                            workspace_bytes, workspace_threads);
                     return 1;
                 }
             }
@@ -1713,12 +1876,14 @@ static int run_benchmark(const Options *options, int width, int height,
             double speedup = 0.0;
             double efficiency = 0.0;
 
-            if (safe_variant) {
+            if (safe_variant && measurement.all_match) {
                 has_speedup = compute_speedup(baseline_ms, measurement.median_ms,
                                               &speedup);
-                if (has_speedup && measurement.actual_threads > 0) {
-                    efficiency = speedup / (double)measurement.actual_threads;
-                }
+            }
+            if (has_speedup && measurement.actual_threads > 0) {
+                efficiency = speedup / (double)measurement.actual_threads;
+            } else {
+                has_speedup = false;
             }
 
             char status[48];
@@ -1763,6 +1928,8 @@ static int run_benchmark(const Options *options, int width, int height,
             }
             if (!safe_variant) {
                 printf("  (V1 timing is shown for demonstration only; it is not a correct algorithm.)\n");
+            } else if (!measurement.all_match) {
+                printf("  (protected variant failed validation; no valid speedup is reported.)\n");
             }
 
             if (row_count >= MAX_BENCHMARK_ROWS) {
@@ -1777,7 +1944,8 @@ static int run_benchmark(const Options *options, int width, int height,
             row->speedup = speedup;
             row->efficiency = efficiency;
             row->has_speedup = has_speedup;
-            row->efficiency_not_applicable = variant == VARIANT_UNSAFE;
+            row->efficiency_not_applicable =
+                variant == VARIANT_UNSAFE || !has_speedup;
             snprintf(row->correctness, sizeof(row->correctness), "%s", status);
             row_count++;
         }
@@ -1924,7 +2092,7 @@ static void print_help(const char *program_name)
     printf("                         sequential, unsafe, critical, atomic, private, reduction.\n");
     printf("                         Default: reduction.\n");
     printf("  --input FILE.ppm       Read a binary PPM P6 image instead of generating one.\n");
-    printf("  --output DIR           Output directory (default: output/).\n");
+    printf("  --output DIR           Output directory (default: output/); its parent must exist.\n");
     printf("  --help                 Show this help and exit successfully.\n\n");
     printf("Examples:\n");
     printf("  %s --demo\n", program_name);
@@ -1939,6 +2107,7 @@ static void print_help(const char *program_name)
     printf("  an explicit --threads value is added if it is distinct.\n");
     printf("  Selecting unsafe for image processing still validates it, but equalization\n");
     printf("  falls back to the safe sequential reference after a clear warning.\n");
+    printf("  An output file that is the same file as --input is rejected before writing.\n");
 }
 
 static bool parse_options(int argc, char **argv, Options *options)
@@ -2138,6 +2307,9 @@ int main(int argc, char **argv)
     }
 
     if (!ensure_output_directory(options.output_dir)) {
+        return EXIT_FAILURE;
+    }
+    if (!validate_output_paths(&options)) {
         return EXIT_FAILURE;
     }
 
