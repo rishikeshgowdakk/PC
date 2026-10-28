@@ -1,36 +1,70 @@
-# CrowdSim — Makefile
-# Build, run, test, and clean the particle movement simulator.
+# CrowdFlow — Makefile
+# High-Performance C11 / OpenMP Build, Test, Benchmark, and Web Orchestration
 
-CC      = gcc
-CFLAGS  = -std=c11 -O2 -fopenmp -Wall -Wextra -Wpedantic
-LDFLAGS = -fopenmp -lm
-TARGET  = crowd_sim
-SRC     = crowd_sim.c
-PYTHON  = python3
+CC       = gcc
+CFLAGS   = -std=c11 -O2 -fopenmp -Wall -Wextra -Wpedantic
+LDFLAGS  = -fopenmp -lm
+PYTHON   = python3
 
-.PHONY: all run test web clean
+SRC_DIR  = src
+OBJ_DIR  = obj
+TEST_DIR = tests
 
-all: $(TARGET)
+SRCS     = $(SRC_DIR)/agent.c \
+           $(SRC_DIR)/obstacle.c \
+           $(SRC_DIR)/spatial_grid.c \
+           $(SRC_DIR)/simulation.c \
+           $(SRC_DIR)/benchmark.c \
+           $(SRC_DIR)/main.c
 
-$(TARGET): $(SRC)
+OBJS     = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
+TARGET   = crowdflow
+
+# Legacy target for backward compatibility
+LEGACY_TARGET = crowd_sim
+LEGACY_SRC    = crowd_sim.c
+
+TEST_TARGET = test_runner
+TEST_SRCS   = $(SRC_DIR)/agent.c \
+              $(SRC_DIR)/obstacle.c \
+              $(SRC_DIR)/spatial_grid.c \
+              $(SRC_DIR)/simulation.c \
+              $(TEST_DIR)/test_crowdflow.c
+
+.PHONY: all clean run test test-sanitizer benchmark web legacy
+
+all: $(TARGET) $(LEGACY_TARGET)
+
+# ── Compile CrowdFlow modular binary ────────────────────────────────
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# ── Compile legacy CrowdSim binary ──────────────────────────────────
+$(LEGACY_TARGET): $(LEGACY_SRC)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
+legacy: $(LEGACY_TARGET)
+
+# ── Run simulation default ──────────────────────────────────────────
 run: $(TARGET)
-	./$(TARGET)
+	./$(TARGET) --agents 5000 --steps 50 --threads 4 --compare
 
-# ── Launch web frontend ──────────────────────────────────────────────
-web: $(TARGET)
-	@echo "Starting CrowdSim web dashboard on http://127.0.0.1:8080 ..."
-	$(PYTHON) server.py
-
-# ── Automated test suite ─────────────────────────────────────────────
-# Each test uses a small workload so the full suite finishes in seconds.
-test: $(TARGET)
-	@echo "========================================"
-	@echo " CrowdSim — Automated Test Suite"
-	@echo "========================================"
+# ── Comprehensive Automated Test Suite ──────────────────────────────
+test: $(TARGET) $(LEGACY_TARGET)
+	@echo "=========================================================="
+	@echo " Running CrowdFlow Unit & Integration Test Suite"
+	@echo "=========================================================="
+	$(CC) $(CFLAGS) $(TEST_SRCS) -o $(TEST_TARGET) $(LDFLAGS)
+	./$(TEST_TARGET)
+	@rm -f $(TEST_TARGET)
+	@echo "=========================================================="
+	@echo " Running Regression Tests for Argument Validation"
+	@echo "=========================================================="
 	@pass=0; fail=0; total=0; \
-	\
 	run_test () { \
 		total=$$((total + 1)); \
 		desc="$$1"; shift; \
@@ -42,56 +76,48 @@ test: $(TARGET)
 			fail=$$((fail + 1)); \
 		fi; \
 	}; \
-	\
-	run_test "Default execution" \
-		"./$(TARGET) --particles 1000 --steps 50 --threads 2"; \
-	\
-	run_test "Small workload (10 particles, 10 steps)" \
-		"./$(TARGET) --particles 10 --steps 10 --threads 1"; \
-	\
-	run_test "1 thread matches sequential" \
-		"./$(TARGET) --particles 5000 --steps 100 --threads 1"; \
-	\
-	run_test "4 threads match sequential" \
-		"./$(TARGET) --particles 5000 --steps 100 --threads 4"; \
-	\
-	run_test "8 threads match sequential" \
-		"./$(TARGET) --particles 5000 --steps 100 --threads 8"; \
-	\
-	run_test "Boundary validation passes" \
-		"./$(TARGET) --particles 2000 --steps 200 --threads 2"; \
-	\
-	run_test "Reject --particles 0" \
-		"! ./$(TARGET) --particles 0"; \
-	\
-	run_test "Reject --particles -5" \
-		"! ./$(TARGET) --particles -5"; \
-	\
-	run_test "Reject --particles abc" \
-		"! ./$(TARGET) --particles abc"; \
-	\
-	run_test "Reject --steps 0" \
-		"! ./$(TARGET) --steps 0"; \
-	\
-	run_test "Reject --steps -1" \
-		"! ./$(TARGET) --steps -1"; \
-	\
-	run_test "Reject --threads 0" \
-		"! ./$(TARGET) --threads 0"; \
-	\
-	run_test "Reject --threads -2" \
-		"! ./$(TARGET) --threads -2"; \
-	\
-	run_test "Reject unknown option" \
-		"! ./$(TARGET) --bogus"; \
-	\
-	run_test "--help shows usage" \
+	run_test "CLI --help displays usage" \
 		"./$(TARGET) --help | grep -q 'Usage'"; \
-	\
-	echo "========================================"; \
-	echo " Results: $$pass passed, $$fail failed ($$total total)"; \
-	echo "========================================"; \
+	run_test "Reject invalid --agents 0" \
+		"! ./$(TARGET) --agents 0"; \
+	run_test "Reject negative --agents -5" \
+		"! ./$(TARGET) --agents -5"; \
+	run_test "Reject non-numeric --agents abc" \
+		"! ./$(TARGET) --agents abc"; \
+	run_test "Reject invalid --steps 0" \
+		"! ./$(TARGET) --steps 0"; \
+	run_test "Reject invalid --threads 0" \
+		"! ./$(TARGET) --threads 0"; \
+	run_test "Reject invalid option --bogus" \
+		"! ./$(TARGET) --bogus"; \
+	run_test "Brute force execution mode runs cleanly" \
+		"./$(TARGET) --agents 500 --steps 20 --neighbors brute --threads 2"; \
+	run_test "Spatial grid execution mode runs cleanly" \
+		"./$(TARGET) --agents 2000 --steps 50 --neighbors grid --threads 4"; \
+	run_test "CSV export mode emits header row" \
+		"./$(TARGET) --agents 500 --steps 10 --csv | grep -q 'Candidate_Checks'"; \
+	echo "  Results: $$pass passed, $$fail failed ($$total regression tests)"; \
 	test $$fail -eq 0
 
+# ── Memory Sanitizers (AddressSanitizer & UndefinedBehaviorSanitizer) ─
+test-sanitizer:
+	@echo "=========================================================="
+	@echo " Running AddressSanitizer & UndefinedBehaviorSanitizer"
+	@echo "=========================================================="
+	$(CC) $(CFLAGS) -fsanitize=address,undefined $(TEST_SRCS) -o test_sanitizer $(LDFLAGS)
+	./test_sanitizer
+	@rm -f test_sanitizer
+	@echo "  -> Clean: Zero memory corruption or undefined behaviors!"
+
+# ── Benchmarking Suite ──────────────────────────────────────────────
+benchmark: $(TARGET)
+	./$(TARGET) --benchmark --agents 5000 --steps 50 --threads 8
+
+# ── Web Dashboard Launch ────────────────────────────────────────────
+web: $(TARGET)
+	@echo "Starting CrowdFlow Web Dashboard on http://127.0.0.1:8080 ..."
+	$(PYTHON) server.py
+
+# ── Clean generated files ───────────────────────────────────────────
 clean:
-	rm -f $(TARGET)
+	rm -rf $(OBJ_DIR) $(TARGET) $(LEGACY_TARGET) $(TEST_TARGET) test_sanitizer

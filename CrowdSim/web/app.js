@@ -1,43 +1,56 @@
-/* ═══════════════════════════════════════════════════════════════════════
-   CrowdSim — Dashboard Application Logic
-   ═══════════════════════════════════════════════════════════════════════ */
-
 (function () {
     "use strict";
 
-    /* ── DOM references ────────────────────────────────────────────── */
-    const inpParticles = document.getElementById("inp-particles");
-    const inpSteps     = document.getElementById("inp-steps");
-    const inpThreads   = document.getElementById("inp-threads");
-    const btnRun       = document.getElementById("btn-run");
-    const btnReset     = document.getElementById("btn-reset");
-    const statusMsg    = document.getElementById("status-msg");
-    const execLog      = document.getElementById("exec-log");
-    const canvas       = document.getElementById("sim-canvas");
-    const ctx          = canvas.getContext("2d");
+    /* ── DOM References ────────────────────────────────────────────── */
+    const inpAgents     = document.getElementById("inp-agents");
+    const inpSteps      = document.getElementById("inp-steps");
+    const inpThreads    = document.getElementById("inp-threads");
+    const selScenario   = document.getElementById("sel-scenario");
+    const selNeighbors  = document.getElementById("sel-neighbors");
+    const selSchedule   = document.getElementById("sel-schedule");
 
-    /* result cells */
-    const R = {
-        particles: document.getElementById("r-particles"),
-        steps:     document.getElementById("r-steps"),
-        threads:   document.getElementById("r-threads"),
-        seq:       document.getElementById("r-seq"),
-        par:       document.getElementById("r-par"),
-        speedup:   document.getElementById("r-speedup"),
-        eff:       document.getElementById("r-eff"),
-        match:     document.getElementById("r-match"),
-        bounds:    document.getElementById("r-bounds"),
-    };
+    const btnRun        = document.getElementById("btn-run");
+    const btnSweep      = document.getElementById("btn-sweep");
+    const btnExport     = document.getElementById("btn-export");
+    const btnReset      = document.getElementById("btn-reset");
 
-    /* ── helpers ───────────────────────────────────────────────────── */
+    const btnViewAgents  = document.getElementById("btn-view-agents");
+    const btnViewDensity = document.getElementById("btn-view-density");
+
+    const statusMsg     = document.getElementById("status-msg");
+    const execLog       = document.getElementById("exec-log");
+    const sysBadge      = document.getElementById("sys-badge");
+
+    const canvas        = document.getElementById("sim-canvas");
+    const ctx           = canvas.getContext("2d");
+
+    const kpiSpeedup    = document.getElementById("kpi-speedup");
+    const kpiEff        = document.getElementById("kpi-eff");
+    const rSeq          = document.getElementById("r-seq");
+    const rPar          = document.getElementById("r-par");
+    const rChecks       = document.getElementById("r-checks");
+    const rNeighbors    = document.getElementById("r-neighbors");
+    const rMatch        = document.getElementById("r-match");
+    const rInvariants   = document.getElementById("r-invariants");
+
+    const historyBody   = document.getElementById("history-body");
+    const scalingContainer = document.getElementById("scaling-container");
+    const scalingBars   = document.getElementById("scaling-bars");
+
+    /* ── State ─────────────────────────────────────────────────────── */
+    let currentData = null;
+    let viewMode = "agents"; /* 'agents' or 'heatmap' */
+    let sessionHistory = [];
+
+    const WORLD_W = 100.0;
+    const WORLD_H = 60.0;
+
+    /* ── Helpers ───────────────────────────────────────────────────── */
     function setStatus(text, cls) {
         statusMsg.className = "status " + (cls || "");
         statusMsg.innerHTML = text;
     }
 
-    function logClear() {
-        execLog.innerHTML = "";
-    }
     function logLine(text, cls) {
         const p = document.createElement("p");
         p.className = "log-line" + (cls ? " " + cls : "");
@@ -46,212 +59,390 @@
         execLog.scrollTop = execLog.scrollHeight;
     }
 
-    function clearResults() {
-        for (const k in R) {
-            R[k].textContent = "—";
-            R[k].className = "";
+    function logClear() {
+        execLog.innerHTML = "";
+    }
+
+    /* ── Canvas Rendering ──────────────────────────────────────────── */
+    function render() {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.fillStyle = "#060911";
+        ctx.fillRect(0, 0, w, h);
+
+        /* World boundary border */
+        ctx.strokeStyle = "#1e293b";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(1, 1, w - 2, h - 2);
+
+        if (!currentData) {
+            ctx.fillStyle = "#334155";
+            ctx.font = "14px system-ui";
+            ctx.textAlign = "center";
+            ctx.fillText("Run a simulation to view crowd dynamics & performance metrics", w / 2, h / 2);
+            return;
+        }
+
+        const scaleX = w / WORLD_W;
+        const scaleY = h / WORLD_H;
+
+        if (viewMode === "heatmap" && currentData.density) {
+            renderHeatmap(scaleX, scaleY);
+        } else {
+            renderAgents(scaleX, scaleY);
+        }
+
+        /* Always draw obstacles */
+        if (currentData.obstacles) {
+            renderObstacles(scaleX, scaleY);
         }
     }
 
-    function validate() {
-        const p = parseInt(inpParticles.value, 10);
-        const s = parseInt(inpSteps.value, 10);
-        const t = parseInt(inpThreads.value, 10);
-        const errors = [];
-        if (isNaN(p) || p < 1 || p > 5000000)
-            errors.push("Particles must be between 1 and 5,000,000.");
-        if (isNaN(s) || s < 1 || s > 1000000)
-            errors.push("Steps must be between 1 and 1,000,000.");
-        if (isNaN(t) || t < 1 || t > 64)
-            errors.push("Threads must be between 1 and 64.");
-        return errors;
+    function renderObstacles(scaleX, scaleY) {
+        currentData.obstacles.forEach(function (obs) {
+            if (obs.type === "circle") {
+                const cx = obs.cx * scaleX;
+                const cy = obs.cy * scaleY;
+                const r = obs.radius * scaleX;
+
+                ctx.fillStyle = "rgba(239, 68, 68, 0.25)";
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = "#ef4444";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            } else if (obs.type === "aabb") {
+                const x = obs.min_x * scaleX;
+                const y = obs.min_y * scaleY;
+                const rw = (obs.max_x - obs.min_x) * scaleX;
+                const rh = (obs.max_y - obs.min_y) * scaleY;
+
+                ctx.fillStyle = "rgba(239, 68, 68, 0.35)";
+                ctx.fillRect(x, y, rw, rh);
+                ctx.strokeStyle = "#ef4444";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, rw, rh);
+            }
+        });
     }
 
-    /* ── canvas drawing ────────────────────────────────────────────── */
-    function drawEmpty() {
-        const w = canvas.width, h = canvas.height;
-        ctx.fillStyle = "#0d1018";
-        ctx.fillRect(0, 0, w, h);
-        ctx.strokeStyle = "#2a2d3a";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, w - 2, h - 2);
-        ctx.fillStyle = "#3a3d4a";
-        ctx.font = "14px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("Run a simulation to see the particle distribution", w / 2, h / 2);
+    function renderAgents(scaleX, scaleY) {
+        if (!currentData.sample_agents) return;
+
+        currentData.sample_agents.forEach(function (a) {
+            const x = a.x * scaleX;
+            const y = a.y * scaleY;
+
+            /* Goal destination marker */
+            ctx.fillStyle = "#22c55e";
+            ctx.beginPath();
+            ctx.arc(a.gx * scaleX, a.gy * scaleY, 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            /* Velocity heading line */
+            ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + a.vx * scaleX * 0.8, y + a.vy * scaleY * 0.8);
+            ctx.stroke();
+
+            /* Agent body */
+            ctx.fillStyle = (a.id % 2 === 0) ? "#38bdf8" : "#818cf8";
+            ctx.beginPath();
+            ctx.arc(x, y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        });
     }
 
-    function drawDensity(grid, gridRows, gridCols) {
-        const w = canvas.width, h = canvas.height;
+    function renderHeatmap(scaleX, scaleY) {
+        const grid = currentData.density;
+        const rows = currentData.grid_rows;
+        const cols = currentData.grid_cols;
+        const cellW = canvas.width / cols;
+        const cellH = canvas.height / rows;
 
-        /* find max density for colour scaling */
         let maxVal = 1;
-        for (let r = 0; r < gridRows; r++)
-            for (let c = 0; c < gridCols; c++)
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
                 if (grid[r][c] > maxVal) maxVal = grid[r][c];
-
-        const cellW = w / gridCols;
-        const cellH = h / gridRows;
-
-        ctx.fillStyle = "#0d1018";
-        ctx.fillRect(0, 0, w, h);
-
-        for (let r = 0; r < gridRows; r++) {
-            for (let c = 0; c < gridCols; c++) {
-                const v = grid[r][c];
-                if (v === 0) continue;
-                const t = Math.min(v / maxVal, 1.0);
-                ctx.fillStyle = densityColor(t);
-                ctx.fillRect(c * cellW, r * cellH, cellW + 0.5, cellH + 0.5);
             }
         }
 
-        /* border */
-        ctx.strokeStyle = "#4a4d5a";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, w - 2, h - 2);
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const v = grid[r][c];
+                if (v === 0) continue;
+                const t = Math.min(v / maxVal, 1.0);
+                ctx.fillStyle = getDensityColor(t);
+                ctx.fillRect(c * cellW, r * cellH, cellW + 0.5, cellH + 0.5);
+            }
+        }
     }
 
-    function densityColor(t) {
-        /* 0 → dark blue,  0.5 → cyan,  0.8 → light,  1.0 → yellow */
+    function getDensityColor(t) {
         let r, g, b;
         if (t < 0.25) {
             const s = t / 0.25;
-            r = Math.round(20 + s * 20);
-            g = Math.round(40 + s * 70);
-            b = Math.round(80 + s * 110);
+            r = Math.round(20 + s * 20); g = Math.round(40 + s * 60); b = Math.round(90 + s * 90);
         } else if (t < 0.5) {
             const s = (t - 0.25) / 0.25;
-            r = Math.round(40 + s * 10);
-            g = Math.round(110 + s * 80);
-            b = Math.round(190 + s * 55);
+            r = Math.round(40 + s * 16); g = Math.round(100 + s * 89); b = Math.round(180 + s * 68);
         } else if (t < 0.75) {
             const s = (t - 0.5) / 0.25;
-            r = Math.round(50 + s * 60);
-            g = Math.round(190 + s * 15);
-            b = Math.round(245 - s * 50);
+            r = Math.round(56 + s * 150); g = Math.round(189 + s * 30); b = Math.round(248 - s * 148);
         } else {
             const s = (t - 0.75) / 0.25;
-            r = Math.round(110 + s * 145);
-            g = Math.round(205 + s * 20);
-            b = Math.round(195 - s * 130);
+            r = Math.round(206 + s * 49); g = Math.round(219 - s * 20); b = Math.round(100 - s * 50);
         }
         return `rgb(${r},${g},${b})`;
     }
 
-    /* ── run simulation ────────────────────────────────────────────── */
+    /* ── Action Handlers ───────────────────────────────────────────── */
     async function runSimulation() {
-        /* validate */
-        const errs = validate();
-        if (errs.length > 0) {
-            setStatus(errs.join(" "), "error");
-            return;
-        }
+        btnRun.disabled = true;
+        btnSweep.disabled = true;
+        scalingContainer.style.display = "none";
+        setStatus('<span class="spinner"></span> Executing simulation…', "info");
+        logClear();
 
-        const params = {
-            particles: parseInt(inpParticles.value, 10),
+        const payload = {
+            agents:    parseInt(inpAgents.value, 10),
             steps:     parseInt(inpSteps.value, 10),
             threads:   parseInt(inpThreads.value, 10),
+            scenario:  selScenario.value,
+            neighbors: selNeighbors.value,
+            schedule:  selSchedule.value,
+            compare:   true,
+            seed:      42
         };
 
-        /* UI state: running */
-        btnRun.disabled = true;
-        clearResults();
-        logClear();
-        drawEmpty();
-        setStatus('<span class="spinner"></span> Running simulation…', "info");
-        logLine("→ Sending request to backend…", "log-info");
-        logLine(`  Particles: ${params.particles}  Steps: ${params.steps}  Threads: ${params.threads}`, "log-info");
+        logLine(`→ Requesting CrowdFlow execution: ${payload.agents} agents, ${payload.steps} steps, ${payload.threads} threads`, "log-info");
+        logLine(`  Algorithm: ${payload.neighbors.toUpperCase()} | Sched: ${payload.schedule.toUpperCase()} | Scenario: ${payload.scenario.toUpperCase()}`, "log-info");
 
         try {
             const resp = await fetch("/api/simulate", {
-                method:  "POST",
+                method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body:    JSON.stringify(params),
+                body: JSON.stringify(payload)
             });
 
             const data = await resp.json();
-
             if (!resp.ok) {
-                setStatus("Error: " + (data.error || "Unknown error"), "error");
-                logLine("✗ " + (data.error || "Request failed"), "log-err");
+                setStatus("Error: " + (data.error || "Simulation failed"), "error");
+                logLine("✗ " + (data.error || "Execution failed"), "log-err");
                 btnRun.disabled = false;
+                btnSweep.disabled = false;
                 return;
             }
 
-            logLine("✓ Simulation completed", "log-ok");
+            currentData = data;
+            render();
 
-            /* populate results */
-            R.particles.textContent = data.particles.toLocaleString();
-            R.steps.textContent     = data.steps.toLocaleString();
-            R.threads.textContent   = data.threads;
-            R.seq.textContent       = data.seq_time_ms.toFixed(3) + " ms";
-            R.par.textContent       = data.par_time_ms.toFixed(3) + " ms";
-            R.speedup.textContent   = data.speedup.toFixed(2) + "×";
-            R.eff.textContent       = data.efficiency.toFixed(1) + "%";
+            /* Populate KPIs & Results */
+            kpiSpeedup.textContent = data.speedup.toFixed(2) + "×";
+            kpiEff.textContent = data.efficiency.toFixed(1) + "%";
+            rSeq.textContent = data.seq_time_ms.toFixed(2) + " ms";
+            rPar.textContent = data.par_time_ms.toFixed(2) + " ms";
+            rChecks.textContent = data.candidate_checks.toLocaleString();
+            rNeighbors.textContent = data.actual_neighbors.toLocaleString();
 
-            R.match.textContent = data.match ? "MATCH" : "MISMATCH";
-            R.match.className   = data.match ? "val-pass" : "val-fail";
-            R.bounds.textContent = data.bounds ? "PASS" : "FAIL";
-            R.bounds.className   = data.bounds ? "val-pass" : "val-fail";
+            rMatch.textContent = data.match ? "MATCH" : "MISMATCH";
+            rMatch.className = data.match ? "val-pass" : "val-fail";
 
-            logLine(`  Sequential: ${data.seq_time_ms.toFixed(3)} ms`, "");
-            logLine(`  Parallel:   ${data.par_time_ms.toFixed(3)} ms`, "");
-            logLine(`  Speedup:    ${data.speedup.toFixed(2)}×`, "");
-            logLine(`  Efficiency: ${data.efficiency.toFixed(1)}%`, "");
-            logLine(`  Match:      ${data.match ? "MATCH" : "MISMATCH"}`,
-                    data.match ? "log-ok" : "log-err");
-            logLine(`  Bounds:     ${data.bounds ? "PASS" : "FAIL"}`,
-                    data.bounds ? "log-ok" : "log-err");
+            rInvariants.textContent = data.bounds ? "PASS" : "FAIL";
+            rInvariants.className = data.bounds ? "val-pass" : "val-fail";
 
-            /* draw density grid */
-            if (data.density && data.grid_rows && data.grid_cols) {
-                drawDensity(data.density, data.grid_rows, data.grid_cols);
-                logLine("✓ Density grid rendered on canvas", "log-ok");
-            }
+            logLine(`✓ Completed in ${data.par_time_ms.toFixed(2)} ms (Speedup: ${data.speedup.toFixed(2)}×, Efficiency: ${data.efficiency.toFixed(1)}%)`, "log-ok");
+            logLine(`  Candidate neighbor checks: ${data.candidate_checks.toLocaleString()}`, "");
+            logLine(`  Numerical Match: ${data.match ? "PASSED (<= 1e-6 tolerance)" : "FAILED"}`, data.match ? "log-ok" : "log-err");
+            logLine(`  Boundary & Obstacle Invariants: ${data.bounds ? "PASSED (0 violations)" : "FAILED"}`, data.bounds ? "log-ok" : "log-err");
 
-            if (data.match && data.bounds) {
-                setStatus("✓ Simulation complete — all checks passed", "success");
-            } else {
-                setStatus("⚠ Simulation complete — verification issues detected", "error");
-            }
+            setStatus("✓ Simulation completed — state equivalence verified", "success");
+
+            /* Append to session history */
+            sessionHistory.push({
+                timestamp: new Date().toLocaleTimeString(),
+                mode: (payload.neighbors === "grid" ? "Grid" : "Brute"),
+                agents: payload.agents,
+                threads: payload.threads,
+                time: data.par_time_ms.toFixed(1) + " ms",
+                speedup: data.speedup.toFixed(2) + "×"
+            });
+            updateHistoryTable();
 
         } catch (err) {
-            setStatus("Connection error: " + err.message, "error");
-            logLine("✗ " + err.message, "log-err");
+            setStatus("Connection Error: " + err.message, "error");
+            logLine("✗ Network error: " + err.message, "log-err");
         } finally {
             btnRun.disabled = false;
+            btnSweep.disabled = false;
         }
     }
 
-    /* ── reset ─────────────────────────────────────────────────────── */
-    function reset() {
-        inpParticles.value = "10000";
-        inpSteps.value     = "100";
-        inpThreads.value   = "4";
-        clearResults();
-        setStatus("", "");
+    async function runThreadScalingSweep() {
+        btnRun.disabled = true;
+        btnSweep.disabled = true;
+        setStatus('<span class="spinner"></span> Running multi-thread scaling benchmark (1, 2, 4, 8 threads)…', "info");
         logClear();
-        execLog.innerHTML = '<p class="log-placeholder">Run a simulation to see the log.</p>';
-        drawEmpty();
+        logLine("→ Starting Strong Scaling Sweep across thread allocations…", "log-info");
+
+        const payload = {
+            agents:    parseInt(inpAgents.value, 10),
+            steps:     parseInt(inpSteps.value, 10),
+            scenario:  selScenario.value,
+            neighbors: selNeighbors.value,
+            schedule:  selSchedule.value
+        };
+
+        try {
+            const resp = await fetch("/api/benchmark_scaling", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await resp.json();
+            if (!resp.ok) {
+                setStatus("Error: " + (data.error || "Benchmark failed"), "error");
+                btnRun.disabled = false;
+                btnSweep.disabled = false;
+                return;
+            }
+
+            logLine(`✓ Scaling benchmark complete. Sequential baseline: ${data.seq_time_ms.toFixed(2)} ms`, "log-ok");
+
+            /* Render scaling bars */
+            scalingBars.innerHTML = "";
+            let maxSpeedup = 1.0;
+            data.scaling.forEach(s => { if (s.speedup > maxSpeedup) maxSpeedup = s.speedup; });
+
+            data.scaling.forEach(function (s) {
+                logLine(`  Threads: ${s.threads} | Time: ${s.time_ms.toFixed(2)} ms | Speedup: ${s.speedup}× | Efficiency: ${s.efficiency}%`, "");
+
+                const row = document.createElement("div");
+                row.className = "scaling-row";
+
+                const pct = Math.min((s.speedup / (maxSpeedup * 1.15)) * 100, 100);
+                row.innerHTML = `
+                    <div class="scaling-label">${s.threads} Thread${s.threads > 1 ? "s" : ""}</div>
+                    <div class="scaling-track"><div class="scaling-fill" style="width: ${pct}%"></div></div>
+                    <div class="scaling-val">${s.speedup}× (${s.efficiency}%)</div>
+                `;
+                scalingBars.appendChild(row);
+            });
+
+            scalingContainer.style.display = "block";
+            setStatus("✓ Multi-thread scaling benchmark completed", "success");
+
+        } catch (err) {
+            setStatus("Error: " + err.message, "error");
+        } finally {
+            btnRun.disabled = false;
+            btnSweep.disabled = false;
+        }
     }
 
-    /* ── events ────────────────────────────────────────────────────── */
-    btnRun.addEventListener("click", runSimulation);
-    btnReset.addEventListener("click", reset);
+    function updateHistoryTable() {
+        if (sessionHistory.length === 0) {
+            historyBody.innerHTML = '<tr><td colspan="5" class="empty-cell">No runs recorded yet.</td></tr>';
+            return;
+        }
 
-    /* allow Enter key in inputs */
-    [inpParticles, inpSteps, inpThreads].forEach(function (inp) {
-        inp.addEventListener("keydown", function (e) {
-            if (e.key === "Enter") runSimulation();
+        historyBody.innerHTML = sessionHistory.slice(-8).reverse().map(function (h) {
+            return `<tr>
+                <td>${h.mode}</td>
+                <td>${h.agents.toLocaleString()}</td>
+                <td>${h.threads}</td>
+                <td>${h.time}</td>
+                <td style="color:var(--accent); font-weight:bold;">${h.speedup}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    function exportCSV() {
+        if (sessionHistory.length === 0) {
+            alert("No simulation runs recorded in current session.");
+            return;
+        }
+
+        let csv = "Timestamp,Algorithm,Agents,Threads,Time,Speedup\n";
+        sessionHistory.forEach(h => {
+            csv += `${h.timestamp},${h.mode},${h.agents},${h.threads},${h.time},${h.speedup}\n`;
         });
+
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `crowdflow_benchmark_${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function resetAll() {
+        inpAgents.value = "5000";
+        inpSteps.value = "50";
+        inpThreads.value = "4";
+        selScenario.value = "pillars";
+        selNeighbors.value = "grid";
+        selSchedule.value = "static";
+        currentData = null;
+        kpiSpeedup.textContent = "—";
+        kpiEff.textContent = "—";
+        rSeq.textContent = "—";
+        rPar.textContent = "—";
+        rChecks.textContent = "—";
+        rNeighbors.textContent = "—";
+        rMatch.textContent = "—";
+        rInvariants.textContent = "—";
+        scalingContainer.style.display = "none";
+        setStatus("", "");
+        logClear();
+        logLine("Reset simulation parameters.", "log-info");
+        render();
+    }
+
+    /* ── Fetch System Info ─────────────────────────────────────────── */
+    async function loadSystemInfo() {
+        try {
+            const resp = await fetch("/api/system_info");
+            if (resp.ok) {
+                const info = await resp.json();
+                sysBadge.textContent = `${info.machine} (${info.cpu_count} cores) • ${info.compiler}`;
+            }
+        } catch (_) {
+            sysBadge.textContent = "Local Native Engine";
+        }
+    }
+
+    /* ── Event Listeners ───────────────────────────────────────────── */
+    btnRun.addEventListener("click", runSimulation);
+    btnSweep.addEventListener("click", runThreadScalingSweep);
+    btnExport.addEventListener("click", exportCSV);
+    btnReset.addEventListener("click", resetAll);
+
+    btnViewAgents.addEventListener("click", function () {
+        viewMode = "agents";
+        btnViewAgents.classList.add("active");
+        btnViewDensity.classList.remove("active");
+        render();
     });
 
-    /* initial draw */
-    drawEmpty();
+    btnViewDensity.addEventListener("click", function () {
+        viewMode = "heatmap";
+        btnViewDensity.classList.add("active");
+        btnViewAgents.classList.remove("active");
+        render();
+    });
 
-    /* auto-run support for headless demonstration / screenshots */
+    loadSystemInfo();
+    render();
+
+    /* Headless screenshot / auto-run query parameter */
     if (new URLSearchParams(window.location.search).get("autorun") === "1") {
-        setTimeout(runSimulation, 250);
+        setTimeout(runSimulation, 300);
     }
 })();

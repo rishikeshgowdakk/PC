@@ -1,40 +1,37 @@
-# CrowdSim — Limitations and Future Work
+# CrowdFlow Limitations and Future Work
 
-## 1. Honest Scope Clarification
+## 1. Scope & Academic Boundaries
 
-CrowdSim is intentionally designed as an **educational parallel computing demonstration** focused on OpenMP shared-memory fundamentals, thread-safe loop parallelisation, wall reflection mathematics, and runtime performance measurement. 
+CrowdFlow is an educational parallel computing and crowd dynamics platform designed for college and university-level computer science curricula. It models continuous-force pedestrian dynamics, spatial partitioning, and OpenMP multi-core scalability.
 
-It is **not** a validated psychological crowd-behaviour predictor, architectural evacuation planner, or commercial physics engine.
+### What CrowdFlow IS:
+- A high-performance C11/OpenMP simulation implementing goal-seeking steering and social separation forces.
+- An algorithmic comparison platform demonstrating $\mathcal{O}(N)$ spatial grids vs $\mathcal{O}(N^2)$ brute force.
+- A multi-core performance analysis platform benchmarking static, dynamic, and guided OpenMP scheduling.
+- An interactive dashboard displaying real native simulation outputs, spatial heatmaps, and scaling charts.
 
----
-
-## 2. Current Technical Limitations
-
-### 2.1 Physics & Movement Model Limitations
-1. **Zero Particle-to-Particle Collisions:**
-   Particles exist as zero-dimensional point masses that pass through each other without collision detection. Introducing inter-particle collision requires an $\mathcal{O}(N^2)$ pairwise distance check or spatial partitioning data structures (e.g., cell lists or quadtrees), which introduces shared mutable state and lock contention outside the scope of this mini-project.
-2. **Absence of Cognitive / Crowd Dynamics:**
-   The simulation does not implement Helbing’s Social Force Model, Reynolds' boids flocking rules, panic behaviour, or goal-seeking pathfinding (e.g., $A^*$ or navigation meshes).
-3. **Rectangular Domain Without Internal Obstacles:**
-   The environment is restricted to a simple $100.0 \times 40.0$ bounding rectangle without interior pillars, doors, bottlenecks, or obstacles.
-
-### 2.2 Parallel & Hardware Limitations
-1. **Shared-Memory Single-Node Scope:**
-   The implementation is strictly limited to OpenMP on single-node symmetric multiprocessing (SMP) systems. It does not utilize MPI for distributed clusters or CUDA/OpenCL for GPU acceleration.
-2. **Memory Bandwidth & Cache Contention:**
-   At very high particle counts ($N > 10^7$), performance becomes bound by RAM memory bandwidth rather than floating-point computation (memory-bound kernel), causing parallel efficiency to plateau.
-3. **Single Timing Run per Request:**
-   By design, each simulation request executes one sequential and one parallel pass to keep interactive demonstration latency low ($< 500\text{ ms}$). Rigorous scientific benchmarking typically requires 10 to 50 iterations with warm-up cycles to eliminate OS scheduler jitter.
+### What CrowdFlow IS NOT:
+- A psychological panic or stampede predictor.
+- A commercial building code evacuation verification suite (e.g., Pathfinder, FDS+Evac).
+- A GPU/CUDA or distributed-memory MPI cluster application.
 
 ---
 
-## 3. Realistic Future Enhancements
+## 2. Technical Limitations of the Current Implementation
 
-| Enhancement | Description | Expected Impact |
+1. **2D Continuous Space Model:** The simulation is strictly planar 2D without multi-story staircases, ramps, or elevation changes.
+2. **Simplified Agent Kinematics:** Agents are modeled as circular 2D entities with isotropic personal space. Real humans possess anisotropic visual fields (stronger avoidance in front than behind) and shoulder-twisting articulation.
+3. **Single-Node Shared-Memory Scope:** Execution is bounded by the physical core count and memory bandwidth of a single workstation. Distributed multi-node scaling across networks is not supported.
+4. **Simple Obstacle Geometry:** Obstacles are restricted to circles and axis-aligned rectangles. Arbitrary convex/concave polygonal meshes with polygon clipping are not currently supported.
+
+---
+
+## 3. Realistic Future Extensions
+
+| Extension | Technical Description | Expected Impact |
 |---|---|---|
-| **Spatial Binning (Cell Lists)** | Partition the 2D arena into regular spatial cells so particles only check neighbours within adjacent cells. | Enables real physical particle collisions with $\mathcal{O}(N)$ time complexity while preserving parallel scalability. |
-| **Hybrid MPI + OpenMP** | Decompose the 2D spatial domain across network nodes using MPI, with OpenMP managing threads within each node. | Extends simulation capability to millions of particles across distributed supercomputing clusters. |
-| **Interior Obstacles & Exits** | Add internal polygonal walls and doorway vectors to simulate room evacuation bottlenecks. | Demonstrates real-world bottlenecks (e.g. door arching) while exercising conditional branching. |
-| **Statistical Multi-Run Engine** | Implement an automated benchmarking mode that runs 20 warm-up runs, discards outliers, and computes standard deviations and confidence intervals. | Provides publication-grade performance characterization. |
-| **Dynamic Scheduling Evaluation** | Compare `schedule(static)` against `schedule(dynamic, chunk)` and `schedule(guided)` under uneven spatial densities. | Direct laboratory comparison of OpenMP scheduling trade-offs for Module 4. |
-| **SIMD Vectorization (`#pragma omp simd`)** | Combine multi-threading with compiler autovectorization (AVX2/AVX-512) for inner coordinate loops. | Leverages CPU data-level parallelism alongside thread-level parallelism. |
+| **Anisotropic Visual Field** | Scale repulsive forces by $(1 + \cos \theta) / 2$, where $\theta$ is angle between velocity and displacement. | More realistic pedestrian following behavior and corridor lane formation. |
+| **SIMD Vectorization (`#pragma omp simd`)** | Align agent structures to 64 bytes and apply AVX-512 vectorization to neighbor distance evaluations. | $2\times$ to $4\times$ throughput increase per core alongside thread parallelism. |
+| **Hybrid MPI + OpenMP** | Spatial domain decomposition: partition the 2D world across network nodes using MPI, with OpenMP managing local cores within each node. | Enables scaling to tens of millions of agents across distributed supercomputers. |
+| **GPU Acceleration (OpenMP Target Offload / CUDA)** | Offload neighbor queries and integration to massive SIMT GPU streaming multiprocessors. | Extreme throughput on large-scale crowd benchmarks ($N \ge 1,000,000$). |
+| **NavMesh Pathfinding ($A^*$)** | Precompute global navigation meshes for complex architectural floorplans with maze-like corridors. | Enables realistic building evacuation simulations around complex obstacles. |

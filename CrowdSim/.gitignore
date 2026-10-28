@@ -1,8 +1,12 @@
-# Compiled binary
+# Compiled binaries
 crowd_sim
+crowdflow
+test_runner
+test_sanitizer
 
-# Object files
+# Object files & build dirs
 *.o
+obj/
 
 # Python artifacts
 __pycache__/
